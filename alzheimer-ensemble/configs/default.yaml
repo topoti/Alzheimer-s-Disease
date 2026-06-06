@@ -1,0 +1,77 @@
+seed: 42
+
+data:
+  root: /kaggle/input/alzheimer-mri-disease-classification-dataset
+  num_classes: 4
+  class_names: [non_dementia, very_mild_dementia, mild_dementia, moderate_dementia]
+  split:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+    stratify: true
+  input_sizes:
+    resnet50: 224
+    densenet121: 224
+    efficientnetb3: 300
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+adasyn:
+  enabled: true
+  apply_on: pixel_space        # pixel_space | embedding_space
+  flatten_size: 64             # 64x64 grayscale for pixel-space ADASYN
+  sampling_strategy: not_majority
+  n_neighbors: 5
+  random_state: 42
+
+augmentation:
+  rotation_deg: 10
+  horizontal_flip: true
+  brightness_jitter: 0.1
+  noise_removal: gaussian      # gaussian | median | none
+  gaussian_sigma: 0.5
+
+training:
+  batch_size: 32
+  batch_size_effnet: 16
+  num_workers: 2
+  mixed_precision: true
+  stage1_epochs: 3
+  stage2_epochs: 25
+  early_stopping_patience: 5
+  loss: cross_entropy
+
+optimizer:
+  name: adamw
+  lr_head: 1.0e-3
+  lr_backbone: 1.0e-4
+  weight_decay: 1.0e-4
+
+scheduler:
+  name: cosine_annealing
+  t_max: 25
+
+ensemble:
+  method: weighted_soft_voting
+  weight_metric: val_f1_macro  # weights = normalized val F1 per model
+
+xai:
+  gradcam:
+    target_layer:
+      resnet50: layer4
+      densenet121: features.denseblock4
+      efficientnetb3: blocks.6
+    samples_per_class: 10      # 5 correct + 5 incorrect
+  shap:
+    explainer: GradientExplainer
+    num_samples: 20
+    background_size: 50
+  lime:
+    num_samples: 20
+    num_features: 10
+    num_segments: 50
+
+evaluation:
+  metrics: [accuracy, macro_f1, per_class_precision, per_class_recall, auc_roc_ovr]
+  headline_metric: macro_f1
