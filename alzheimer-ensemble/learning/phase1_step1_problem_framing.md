@@ -15,7 +15,7 @@ The one question this step answers:
 
 Every word matters:
 
-- **Supervised** — You have 6,400 MRI images, each already labeled with the correct answer by an expert. The model learns from these (image → label) pairs so it can label *new, unseen* images. "Supervised" = *learning from labeled examples*.
+- **Supervised** — You have 86,437 MRI images, each already labeled with the correct answer by an expert. The model learns from these (image → label) pairs so it can label *new, unseen* images. "Supervised" = *learning from labeled examples*.
 - **Image classification** — Input = a picture; output = a single label naming what's in it. (Not *detection*, which draws boxes; not *segmentation*, which colors every pixel.)
 - **Multi-class (4-class)** — Each image belongs to exactly one of four mutually exclusive buckets.
 - **Probability output, not a single guess** — The model outputs four numbers that sum to 1, e.g. `[0.05, 0.10, 0.70, 0.15]` ("5% Non, 10% Very Mild, 70% Mild, 15% Moderate"). We take the largest (`argmax`) → "Mild." The function that squashes raw model outputs into this clean probability vector is **softmax**. This probability vector is what later makes the ensemble and XAI possible.
@@ -23,23 +23,25 @@ Every word matters:
 
 ### The four classes
 
-| Class | Meaning | # images |
+| Class (dataset folder name) | Meaning | # images |
 |---|---|---|
-| Non-Dementia | healthy brain | 3,200 |
-| Very Mild Dementia | earliest decline | 2,240 |
-| Mild Dementia | clear symptoms | 896 |
-| Moderate Dementia | significant impairment | 64 |
-| **Total** | | **6,400** |
+| Non Demented | healthy brain | 67,222 |
+| Very mild Dementia | earliest decline | 13,725 |
+| Mild Dementia | clear symptoms | 5,002 |
+| Moderate Dementia | significant impairment | 488 |
+| **Total** | | **86,437** |
+
+> **Dataset:** `ninadaithal/imagesoasis` on Kaggle ("OASIS Alzheimer's Detection") — 2D MRI slices from OASIS-1, organized in one folder per class. This is a *larger* OASIS export than the reference paper's set, but it is still OASIS, still the same 4 severity classes.
 
 ---
 
 ## 2. The fact that drives the entire project: **class imbalance**
 
-The biggest class has **50× more examples** than the smallest (3,200 ÷ 64). That severe imbalance is the villain this whole research is built to defeat.
+The biggest class has **~138× more examples** than the smallest (67,222 ÷ 488). That severe imbalance is the villain this whole research is built to defeat — and it is *more* extreme here than in the reference paper's smaller export, which makes the case for ADASYN even stronger.
 
-**Why it's dangerous:** a model is trained to make overall error small. If half the images are "Non-Dementia," the model finds a lazy shortcut — *lean toward common classes, basically never predict "Moderate."* It scores high overall while being **blind to the rarest, most medically urgent class.** That's the default behavior, not a hypothetical.
+**Why it's dangerous:** a model is trained to make overall error small. If more than three-quarters of the images are "Non-Dementia," the model finds a lazy shortcut — *lean toward common classes, basically never predict "Moderate."* It scores high overall while being **blind to the rarest, most medically urgent class.** That's the default behavior, not a hypothetical.
 
-**Analogy (memorize this):** teaching a child with 3,200 dog photos, 2,240 cat photos, 896 rabbit photos, and only 64 hamster photos. The child gets great at dogs, decent at rabbits, and *never* says "hamster" — because guessing "dog" is usually right.
+**Analogy (memorize this):** teaching a child with 67,222 dog photos, 13,725 cat photos, 5,002 rabbit photos, and only 488 hamster photos. The child gets great at dogs, decent at rabbits, and *never* says "hamster" — because guessing "dog" is usually right.
 
 **This single fact is the root of three later decisions:**
 
@@ -72,11 +74,11 @@ The biggest class has **50× more examples** than the smallest (3,200 ÷ 64). Th
 Write these down (a notebook or text file — this becomes raw material for your paper's intro):
 
 - [ ] **1. One paragraph, your own words:** state the problem — input, output, number of classes, and the imbalance. Don't copy the table; explain it like you're telling a friend.
-- [ ] **2. Compute the imbalance ratios** relative to Moderate = 64:
-  - Non-Dementia = 3200 / 64 = ?
-  - Very Mild = 2240 / 64 = ?
-  - Mild = 896 / 64 = ?
-- [ ] **3. The "dumb baseline" question:** If a lazy model ALWAYS predicts "Non-Dementia," what accuracy does it score, and why is that number dangerously misleading? *(Hint: 3200 out of 6400.)*
+- [ ] **2. Compute the imbalance ratios** relative to Moderate = 488:
+  - Non Demented = 67222 / 488 = ?
+  - Very mild = 13725 / 488 = ?
+  - Mild = 5002 / 488 = ?
+- [ ] **3. The "dumb baseline" question:** If a lazy model ALWAYS predicts "Non Demented," what accuracy does it score, and why is that number dangerously misleading? *(Hint: 67,222 out of 86,437 ≈ 78%.)*
 
 ✅ When you can answer #3 cleanly, you've understood the heart of this project — and you'll *feel* why ADASYN matters before we even define it.
 

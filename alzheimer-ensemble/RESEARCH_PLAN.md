@@ -29,15 +29,17 @@ Your contribution has three pillars:
 
 ### Concepts to internalize
 
-**Alzheimer's as a 4-class ML problem.** The OASIS dataset labels each MRI slice into one of four severity stages:
-- **Non-Dementia (3200 images)** — healthy brain
-- **Very Mild Dementia (2240 images)** — earliest detectable cognitive decline
-- **Mild Dementia (896 images)** — clear symptoms, manageable
-- **Moderate Dementia (64 images)** — significant impairment
+**Alzheimer's as a 4-class ML problem.** The OASIS dataset (`ninadaithal/imagesoasis`, ~86,437 slices from OASIS-1) labels each MRI slice into one of four severity stages:
+- **Non Demented (67,222 images)** — healthy brain
+- **Very mild Dementia (13,725 images)** — earliest detectable cognitive decline
+- **Mild Dementia (5,002 images)** — clear symptoms, manageable
+- **Moderate Dementia (488 images)** — significant impairment
+
+The imbalance is **~138×** (67,222 ÷ 488) — even harsher than the reference paper's smaller export, which only strengthens the case for ADASYN.
 
 From an ML view, this is **ordinal multi-class classification** (the classes have an order: healthy → mild → moderate). You'll treat it as plain multi-class for now (4 mutually exclusive labels) because the reference paper does.
 
-**Imbalanced dataset — analogy.** Imagine teaching a child to recognize animals using 3200 dog photos, 2240 cat photos, 896 rabbit photos, and only 64 hamster photos. The child will become excellent at dogs and cats, mediocre at rabbits, and almost never guess "hamster" — because guessing "dog" is usually right. A model trained on imbalanced data does exactly this: it learns to over-predict the majority class to maximize accuracy, while failing on the rare class. In medicine this is catastrophic — Moderate Dementia is the rarest class but arguably the most clinically urgent.
+**Imbalanced dataset — analogy.** Imagine teaching a child to recognize animals using 67,222 dog photos, 13,725 cat photos, 5,002 rabbit photos, and only 488 hamster photos. The child will become excellent at dogs and cats, mediocre at rabbits, and almost never guess "hamster" — because guessing "dog" is usually right. A model trained on imbalanced data does exactly this: it learns to over-predict the majority class to maximize accuracy, while failing on the rare class. In medicine this is catastrophic — Moderate Dementia is the rarest class but arguably the most clinically urgent.
 
 **ADASYN — what it is and why it beats plain augmentation.**
 - *Plain augmentation* (rotation, flip, zoom on existing images) makes the rare class bigger but doesn't change *which* samples the model struggles with.
@@ -103,8 +105,8 @@ Three options exist:
 **Estimated time: 3–4 days**
 
 ### Dataset
-- **OASIS MRI** from Kaggle (search: "Alzheimer MRI Disease Classification Dataset" — same 6400-image split as Mahmud et al.)
-- 4 classes, 2D axial slice JPGs, already pre-extracted from 3D MRI volumes
+- **OASIS MRI** from Kaggle — **`ninadaithal/imagesoasis`** ("OASIS Alzheimer's Detection"), ~86,437 slices derived from OASIS-1. This is a **larger, different export than Mahmud et al. used** (still OASIS, still the same 4 classes), so the comparison to their reported numbers is *indicative*; the controlled comparison is your same-family ablation on this same dataset. Cite both the OASIS-1 source and the Kaggle dataset.
+- 4 classes, 2D axial slice images, already pre-extracted from 3D MRI volumes. Filenames keep the OASIS naming (`OAS1_XXXX_...`), so the `OAS1_XXXX` prefix gives the **patient/subject ID** — needed for the subject-level split below.
 
 ### Preprocessing pipeline (in order)
 
@@ -129,23 +131,27 @@ Why: if you ADASYN first then split, synthetic samples generated from a test ima
 
 ### Expected post-ADASYN training distribution
 
-Starting (train ≈ 80% of 6400 = 5120):
-- Non-Dementia: ~2560
-- Very Mild: ~1792
-- Mild: ~717
-- Moderate: ~51
+Starting (train ≈ 80% of 86,437 ≈ 69,000 slices; exact per-class counts shift because the split is by *patient*):
+- Non Demented: ~53,800
+- Very mild Dementia: ~11,000
+- Mild Dementia: ~4,000
+- Moderate Dementia: ~390
 
 After ADASYN (target = match majority class):
-- All 4 classes: ~2560 each → ~10,240 training samples total
+- All 4 classes: ~53,800 each → ~215,000 training samples total
 - Test set stays imbalanced (it must reflect reality)
+
+> **Scale note:** balancing all the way to the ~53,800 majority means ~50k synthetic Moderate samples from ~390 reals and a ~215k-image train set — heavy for pixel-space ADASYN *and* GPU quota. Use `sampling_strategy` to cap the target below full majority, and/or develop on a stratified subset first. Document the choice.
 
 ### Train/Val/Test split
 
-**80 / 10 / 10 stratified split.** Stratify on class label so each split preserves the original class proportions. Use `sklearn.model_selection.train_test_split(stratify=y)`. Set `random_state=42` for reproducibility.
+**Subject-level (patient-grouped), stratified, 80 / 10 / 10.** This OASIS export has **many slices per patient**, so a naive slice-level split leaks patients across train/test and inflates every metric. Split **patients, not slices**: build the unique-subject list (each subject has one class), split the *subjects* 80/10/10 stratified by class with `random_state=42` (`StratifiedGroupKFold`, or a manual stratified split of the subject list), then expand each subject to its slices. Save the subject→split assignment to disk and verify **no subject ID appears in two splits**.
+
+> **Rare-subject caveat:** the Moderate class may come from very few distinct patients, which limits how independently it can be split across train/val/test. Document exactly how the rare-class subjects were allocated — this is a stated limitation, not something to hide by silently reverting to slice-level splitting.
 
 ### Checklist
-- [ ] Download OASIS dataset to Kaggle notebook
-- [ ] Implement stratified 80/10/10 split → save indices to disk
+- [ ] Attach `ninadaithal/imagesoasis` to the Kaggle notebook; count images **and unique patients** per class (parse `OAS1_XXXX`)
+- [ ] Implement **subject-level** stratified 80/10/10 split → save subject→split assignment + indices to disk; verify no patient spans two splits
 - [ ] Build a PyTorch `Dataset` class that returns `(image_tensor, label)`
 - [ ] Apply ADASYN from `imblearn.over_sampling.ADASYN` on training subset only
 - [ ] Print class distribution before/after ADASYN — verify balance
@@ -271,7 +277,7 @@ This is a real subtlety the reference paper sidesteps. Options:
 A 4×4 matrix. Rows = true class, columns = predicted class. Diagonal = correct. Off-diagonal patterns to look for:
 - **Adjacent confusions** (Mild ↔ Very Mild, Moderate ↔ Mild) — *expected*, these are clinically similar
 - **Distant confusions** (Moderate predicted as Non-Dementia) — *dangerous*, indicates real failure
-- **Moderate row should be the weakest** — only 64 original samples; even with ADASYN this class will be hardest. Pay extra attention to its recall.
+- **Moderate row should be the weakest** — only 488 original samples (from very few patients); even with ADASYN this class will be hardest. Pay extra attention to its recall.
 
 ### Comparison table (paper Table 4 or similar)
 
@@ -323,7 +329,7 @@ Also run two **ablation studies**:
 - End with the gap table from Phase 1
 
 **4. Methodology (3–4 pages)**
-- 4.1 Dataset (OASIS description, splits)
+- 4.1 Dataset (OASIS `ninadaithal/imagesoasis` description, counts, unique-subjects-per-class, subject-level grouped stratified splits; note it differs from the reference paper's export)
 - 4.2 Preprocessing pipeline (figure showing each step)
 - 4.3 ADASYN (algorithm summary + your application choices)
 - 4.4 Three backbones (one paragraph each + architecture figure)
@@ -343,7 +349,7 @@ Also run two **ablation studies**:
 - Why heterogeneous-paradigm ensemble helps (cite the uncorrelated-error theory)
 - Clinical implications of the XAI outputs
 - Limitations: all backbones are CNNs (acknowledge openly), 2D slices not 3D volumes, single dataset
-- Threats to validity
+- Threats to validity: note the **patient-level (subject-grouped) split** used to avoid slice leakage (a strength), but the **Moderate class draws on very few unique subjects**, limiting independent evaluation; pixel-space ADASYN can blur synthetics
 
 **7. Conclusion + Future Work (~0.5 page)** — Summarize contributions, list future work (CNN + Transformer ensemble, 3D volumetric input, multi-site validation, prospective clinical study).
 
@@ -410,8 +416,8 @@ In the introduction and again in discussion, write something like:
 
 - Create a Kaggle account, enable phone verification → unlocks GPU
 - New notebook → Settings → Accelerator: **GPU T4 ×2** (or P100)
-- Add the OASIS dataset to the notebook as an *input dataset*
-- 30 hrs/week GPU quota — budget ~12 hrs for training (3 models × ~3 hrs each + ensemble + XAI)
+- Add the OASIS dataset (`ninadaithal/imagesoasis`) to the notebook as an *input dataset*
+- 30 hrs/week GPU quota — with ~86k images (and a balanced train set up to ~200k after ADASYN), epochs are far heavier than on the reference paper's 6.4k set, so the old "~3 hrs/model" no longer holds. Stay in budget via: the cheap frozen-backbone stage, fewer epochs + early stopping, capping the ADASYN target / training on a subset, and checkpoint-resume across sessions/weeks
 - Save checkpoints to `/kaggle/working/` then download
 
 ### Project folder structure
@@ -468,7 +474,7 @@ alzheimer-ensemble/
 |---|---|
 | 1 | Can write a 1-page gap statement from memory |
 | 2 | All 3 models load via `timm.create_model(name, pretrained=True, num_classes=4)` without error |
-| 3 | Class distribution post-ADASYN is roughly equal across 4 classes on training set only; test set retains original imbalance |
+| 3 | Split is **patient-disjoint** (no subject in two splits); class distribution post-ADASYN is roughly equal across 4 classes on training set only; test set retains original imbalance |
 | 4 | All 3 models reach >85% val accuracy; ensemble val F1 > best single-model val F1 |
 | 5 | Grad-CAM heatmaps consistently highlight medial temporal / hippocampal regions on dementia-positive cases (sanity check with a clinician) |
 | 6 | Macro-F1 ≥ 0.93 and Moderate-class recall ≥ 0.80 on test set; ablation without ADASYN shows ≥3pp drop in Moderate recall |
@@ -497,5 +503,5 @@ alzheimer-ensemble/
 | Moderate-class recall stays low even with ADASYN | Try class-weighted loss in addition to ADASYN; try focal loss; expand to OASIS-2 or ADNI if needed |
 | Kaggle session timeouts during training | Save checkpoint every epoch; resume from last checkpoint; run shorter epochs initially |
 | ADASYN on pixel space produces noisy synthetic samples | Switch to embedding-space ADASYN (Option B from Phase 3) |
-| Three-model ensemble overfits 6400 images | Heavier dropout (0.5), stronger augmentation, k-fold cross-validation |
+| Three-model ensemble overfits / memorizes patients (~86k images, many per subject) | Patient-grouped split (already adopted); heavier dropout (0.5), stronger augmentation, k-fold cross-validation |
 | SHAP runs out of memory on full test set | Sub-sample 20 representative test images for SHAP; full Grad-CAM coverage compensates |

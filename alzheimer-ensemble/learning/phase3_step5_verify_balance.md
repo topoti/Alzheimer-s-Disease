@@ -13,8 +13,8 @@ The one question this step answers:
 
 Build `notebooks/02_adasyn_sanity_check.ipynb` and print, side by side:
 
-1. **Training distribution before vs after ADASYN** — before: ~2560/1792/717/51; after: all four ≈ ~2,560. *Roughly equal* is the pass condition.
-2. **Test distribution** — must be **unchanged and still imbalanced** (~400/280/112/8 at 10%). If test moved, ADASYN touched data it shouldn't have — stop and fix.
+1. **Training distribution before vs after ADASYN** — before: ~53,800/11,000/4,000/390; after: all four ≈ the majority (~53,800) or whatever target you set in Step 4. *Roughly equal* is the pass condition.
+2. **Test distribution** — must be **unchanged and still imbalanced** (~6,720/1,373/500/49 at ≈10%; exact counts vary because the split is by patient). If test moved, ADASYN touched data it shouldn't have — stop and fix.
 
 This is Phase 3's official verification (from the plan): *post-ADASYN training is roughly balanced across 4 classes; test retains original imbalance.*
 

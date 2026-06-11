@@ -5,13 +5,13 @@
 
 The one question this step answers:
 
-> **How do we fix the 50× class imbalance from Step 1, and why is ADASYN smarter than the alternatives?**
+> **How do we fix the ~138× class imbalance from Step 1, and why is ADASYN smarter than the alternatives?**
 
 ---
 
 ## 1. Three ways to fix imbalance — a ladder from dumb to smart
 
-In Step 1 you learned the villain: one class (Moderate, 64 images) is drowned out by another (Non-Dementia, 3,200). There are three families of fixes; they form a ladder.
+In Step 1 you learned the villain: one class (Moderate, 488 images) is drowned out by another (Non Demented, 67,222). There are three families of fixes; they form a ladder.
 
 **Rung 1 — Plain augmentation (what the reference paper does).**
 Take the existing minority images and make copies that are rotated, flipped, zoomed, brightness-shifted. Now you have more minority images.
@@ -60,6 +60,8 @@ You'll use **Option A for the main pipeline, Option B as an ablation.** For now 
 > **ADASYN is applied AFTER the train/val/test split, to the TRAINING SET ONLY.**
 
 If you balance first and split later, synthetic samples built from a test image's neighbors leak into training. Your test score inflates, and a reviewer who spots it rejects the paper. We'll enforce this in Phase 3 — flag it now so it's burned in.
+
+> **A second leakage trap, specific to this dataset:** OASIS gives you *many 2D slices per patient*. If two slices of the *same* patient land in both train and test, the model can "recognize the patient" rather than the disease — the same inflation in a different disguise. Phase 3 Step 3 fixes this with a **subject-level (patient-grouped) split**: every slice of a given patient stays in exactly one split. ADASYN then runs only on the training patients' slices.
 
 ### Resources (a few hours total)
 - **He, Bai, Garcia, Li (2008)** — *"ADASYN: Adaptive Synthetic Sampling Approach for Imbalanced Learning."* Read the intro + **Algorithm 1**. That's the primary source you'll cite.

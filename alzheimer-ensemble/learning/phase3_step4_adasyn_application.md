@@ -36,15 +36,17 @@ ADASYN's default target is "match the majority class." Starting from the ~train 
 
 | Class | Before ADASYN | After ADASYN (target ≈ majority) |
 |---|---|---|
-| Non-Dementia | ~2,560 | ~2,560 |
-| Very Mild | ~1,792 | ~2,560 |
-| Mild | ~717 | ~2,560 |
-| Moderate | ~51 | ~2,560 |
-| **Total** | ~5,120 | **~10,240** |
+| Non Demented | ~53,800 | ~53,800 |
+| Very mild Dementia | ~11,000 | ~53,800 |
+| Mild Dementia | ~4,000 | ~53,800 |
+| Moderate Dementia | ~390 | ~53,800 |
+| **Total** | ~69,000 | **~215,000** |
 
-All four classes land near ~2,560 → ~10,240 balanced training samples. **Test set stays imbalanced** (it must reflect reality).
+All four classes land near ~53,800 → ~215,000 balanced training samples. **Test set stays imbalanced** (it must reflect reality).
 
 > ADASYN won't always hit *exactly* equal counts (it depends on the difficulty weighting `rᵢ`) — "roughly balanced" is expected and fine. You can also pass `sampling_strategy` to control targets.
+
+> **Scale note (this larger dataset).** Balancing all the way to the ~53,800 majority means synthesizing ~50k Moderate samples from only ~390 reals (a ~138× expansion) and a ~215k-image training set — heavy for pixel-space nearest-neighbor search *and* for training time/GPU quota (Phase 8). Two sane levers, both reportable: (a) use `sampling_strategy` to balance to a **target below the full majority** (e.g. lift each minority class to a fixed count rather than all the way to 53,800), and/or (b) develop on a **stratified subset** first, then scale up. Document whichever you choose.
 
 ---
 
@@ -56,7 +58,7 @@ All four classes land near ~2,560 → ~10,240 balanced training samples. **Test 
 3. Reshape `X_res` back to images; cache to `data/adasyn_cache/` so you don't recompute every run.
 4. Downstream training reads the **balanced cache** for train; val/test read the original images.
 
-A subtle gotcha: `Moderate ~51` samples means ADASYN's `n_neighbors` (default 5) must be ≤ available minority neighbors. If it errors on the tiny class, lower `n_neighbors`.
+A subtle gotcha: even though Moderate now has ~390 *slices*, they come from very few *patients* (Step 3) and can be near-duplicates, so ADASYN's `n_neighbors` (default 5) must be ≤ available distinct minority neighbors. If it errors on the tiny class, lower `n_neighbors`.
 
 ### Resources (a few hours total)
 - `imblearn.over_sampling.ADASYN` docs — `sampling_strategy`, `n_neighbors`, `random_state`.

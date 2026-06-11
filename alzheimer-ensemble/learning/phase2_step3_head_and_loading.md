@@ -26,7 +26,7 @@ GlobalAveragePool  →  Dropout(0.3)  →  Linear(num_features, 4)
 ```
 
 - **Global average pool** collapses the feature map to one vector per image.
-- **Dropout(0.3)** randomly zeroes 30% of features during training → regularization, fights overfitting on only 6,400 images.
+- **Dropout(0.3)** randomly zeroes 30% of features during training → regularization that fights overfitting (still standard practice even on a dataset this large, ~86k images).
 - **Linear(num_features, 4)** is the actual 4-class classifier. `num_features` differs per backbone (e.g. ~2048 for ResNet50, ~1536 for EffNetB3, ~1024 for DenseNet121) — read it from the model, don't hardcode.
 
 `timm` makes this trivial: `timm.create_model(name, pretrained=True, num_classes=4)` already swaps in a fresh 4-class head. You can pass `drop_rate=0.3` for the dropout. (You may keep the default head or build the explicit `Sequential` above — both are fine; document which.)

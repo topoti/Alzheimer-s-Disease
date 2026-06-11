@@ -83,4 +83,4 @@ Plus `random_state=42` in the split (Phase 3 Step 3) and ADASYN (Phase 3 Step 4)
 
 ## Curriculum complete
 
-You've walked all 8 phases. Loop back to **`phase1_step1_problem_framing.md`** any time you need to re-anchor on *why* the project is built the way it is — every decision traces back to the 50× class imbalance.
+You've walked all 8 phases. Loop back to **`phase1_step1_problem_framing.md`** any time you need to re-anchor on *why* the project is built the way it is — every decision traces back to the ~138× class imbalance.

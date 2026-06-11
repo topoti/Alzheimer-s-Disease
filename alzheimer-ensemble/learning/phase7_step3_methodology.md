@@ -11,7 +11,7 @@ The one question this step answers:
 
 ## 1. The seven subsections (follow your own pipeline order)
 
-4.1 **Dataset** — OASIS description, 4 classes, counts, the 80/10/10 **stratified** split, `random_state=42`. (Phase 3 Steps 1, 3.)
+4.1 **Dataset** — OASIS (`ninadaithal/imagesoasis`, ~86,437 slices from OASIS-1) description, 4 classes, counts, **unique-subjects-per-class**, and the **subject-level (patient-grouped) stratified** 80/10/10 split, `random_state=42`. State that it differs from the reference paper's export. (Phase 3 Steps 1, 3.)
 4.2 **Preprocessing pipeline** — the 6 steps with a **figure** showing each stage; note ImageNet normalization and the two input sizes (224/300). (Phase 3 Step 2.)
 4.3 **ADASYN** — algorithm summary (the `rᵢ` weighting), your **pixel-space (Option A)** application, the **train-only-after-split** rule, before/after distribution table. (Phase 1 Step 2, Phase 3 Step 4.)
 4.4 **Three backbones** — one paragraph each (paradigm + why), plus an **architecture figure**; the params/input-size table. (Phase 2 Step 1.)
@@ -24,7 +24,7 @@ The one question this step answers:
 ## 2. The reproducibility checklist a reviewer looks for
 
 Make sure the section states, somewhere:
-- exact **split ratios + stratification + seed**,
+- exact **split ratios + stratification + patient-level grouping + seed** (and how rare-subject classes were allocated),
 - **ADASYN placement** (after split, train only) and target distribution,
 - every **hyperparameter** (optimizer, LRs, batch size, epochs, scheduler, early-stopping criterion),
 - **framework + library versions** (point to `requirements.txt`),

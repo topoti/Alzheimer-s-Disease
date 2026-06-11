@@ -44,7 +44,7 @@ Notice it (a) names the baseline, (b) states all three pillars, (c) uses the saf
 
 ## 4. Don't forget the license check
 
-Before you build anything on OASIS, confirm its **data-use / license terms permit publication** of derived results and figures. OASIS has a data-use agreement; note its citation requirements. A locked-down license discovered *after* you write the paper is a disaster — clear it now.
+Before you build anything on OASIS, confirm its **data-use / license terms permit publication** of derived results and figures. You are using the Kaggle dataset **`ninadaithal/imagesoasis`** ("OASIS Alzheimer's Detection"), which is derived from **OASIS-1**; cite *both* the OASIS-1 source (Marcus et al., data-use agreement) *and* the Kaggle dataset. Note this is a **different (larger) OASIS export than Mahmud et al. used** — so your comparison to their reported numbers is *indicative*, and the controlled, apples-to-apples comparison is your **same-family ablation** run on this same dataset (Phase 6 Step 3). A locked-down license discovered *after* you write the paper is a disaster — clear it now.
 
 ### Resources (a few hours total)
 - **Mahmud et al. (2024)** in *Diagnostics* — re-read Abstract, Intro, and the **results table**; copy their per-class metrics into your notes.

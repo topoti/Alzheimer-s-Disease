@@ -15,7 +15,7 @@ Rows = true class, columns = predicted class. The diagonal is correct; off-diago
 
 - **Adjacent confusions** (Mild ↔ Very Mild, Moderate ↔ Mild) — **expected**; these stages are clinically similar.
 - **Distant confusions** (Moderate predicted as Non-Dementia) — **dangerous**; a sick patient sent home. Call these out explicitly.
-- **The Moderate row is the weakest** — only 64 originals; even with ADASYN it's the hardest. Pay special attention to its recall (its diagonal cell ÷ row sum).
+- **The Moderate row is the weakest** — only 488 originals (from very few patients); even with ADASYN it's the hardest. Pay special attention to its recall (its diagonal cell ÷ row sum).
 
 Plot it with `seaborn.heatmap` (annotated counts), save to `results/figures/`. Make one for the **ensemble** and keep the single-model ones for the appendix/ablation.
 

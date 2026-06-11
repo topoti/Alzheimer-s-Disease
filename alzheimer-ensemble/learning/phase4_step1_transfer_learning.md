@@ -11,7 +11,7 @@ The one question this step answers:
 
 ## 1. Why not just train everything from scratch?
 
-You have only ~10,240 (post-ADASYN) training images — far too few to train a 25M-parameter network from random weights. Transfer learning reuses ImageNet knowledge (edges, textures, shapes) and only *adapts* it. The risk: if you blast the pretrained weights with a big learning rate, you **erase** that knowledge before the model adapts. The two-stage recipe avoids this.
+Even though ADASYN inflates the training set to a large size (~200k images), the *real* signal is still dominated by relatively few distinct minority patients, and training a 25M-parameter network from random weights would need far more genuine data — and far more GPU time than your quota allows (Phase 8). Transfer learning reuses ImageNet knowledge (edges, textures, shapes) and only *adapts* it: faster to converge, more accurate, and quota-friendly. The risk: if you blast the pretrained weights with a big learning rate, you **erase** that knowledge before the model adapts. The two-stage recipe avoids this.
 
 ---
 

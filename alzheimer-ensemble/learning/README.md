@@ -11,7 +11,7 @@ through them in order; each file points to the next.
 ## Phase 1 — Research Foundation (understanding, no code)
 | Step | File | Scope |
 |---|---|---|
-| 1 | [phase1_step1_problem_framing.md](phase1_step1_problem_framing.md) | Frame the problem; the 50× class imbalance |
+| 1 | [phase1_step1_problem_framing.md](phase1_step1_problem_framing.md) | Frame the problem; the ~138× class imbalance |
 | 2 | [phase1_step2_understanding_adasyn.md](phase1_step2_understanding_adasyn.md) | Augmentation → SMOTE → ADASYN; the leakage rule (Pillar 1) |
 | 3 | [phase1_step3_heterogeneous_ensembles.md](phase1_step3_heterogeneous_ensembles.md) | Uncorrelated-error theory; cross-paradigm vs cross-architecture (Pillar 2) |
 | 4 | [phase1_step4_xai_landscape.md](phase1_step4_xai_landscape.md) | Grad-CAM vs SHAP vs LIME; why three (Pillar 3) |

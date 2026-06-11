@@ -13,7 +13,7 @@ The one question this step answers:
 
 | Metric | What it measures | Why it matters in this project |
 |---|---|---|
-| **Accuracy** | % correctly classified | **Misleading** on imbalanced data — always predicting "Non-Dementia" scores ~50% (Step 1's dumb baseline). Report it, but de-emphasize. |
+| **Accuracy** | % correctly classified | **Misleading** on imbalanced data — always predicting "Non-Dementia" scores ~78% (Step 1's dumb baseline). Report it, but de-emphasize. |
 | **Precision (per class)** | Of all "Mild" predictions, how many were truly Mild? | Low precision = false alarms → patient anxiety, wasted follow-ups |
 | **Recall / Sensitivity (per class)** | Of all true Mild patients, how many did we catch? | **The most critical metric.** A missed dementia case (false negative) is far worse than a false alarm |
 | **F1-Score (per class + macro)** | Harmonic mean of precision & recall | One number balancing both. **Macro-F1** (unweighted average over the 4 classes) is the right *headline* for imbalanced medical data |

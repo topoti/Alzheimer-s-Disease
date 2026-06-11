@@ -31,7 +31,7 @@ In Results, state *what* the numbers are. Save *why* for Discussion. Report accu
   - **All three backbones are CNNs** — this is "cross-paradigm," not "cross-architecture" (the honesty clause). Frame CNN+Transformer as future work.
   - **2D slices, not 3D volumes** — loses inter-slice context.
   - **Single dataset (OASIS)** — generalization unproven without multi-site validation.
-- **Threats to validity** — slice-level (not patient-level) splitting risk; pixel-space ADASYN producing blurry synthetics; small Moderate class even after balancing.
+- **Threats to validity** — note you used **patient-level (subject-grouped) splitting** to avoid slice leakage (a strength worth stating), but the **Moderate class comes from very few unique subjects**, which limits how independently it can be split/evaluated; pixel-space ADASYN producing blurry synthetics; small Moderate class even after balancing.
 
 > Reviewers reward openly-acknowledged limitations and punish hidden ones. The CNN-only admission is the single most important sentence for acceptance.
 

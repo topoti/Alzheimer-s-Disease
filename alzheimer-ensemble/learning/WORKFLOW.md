@@ -5,14 +5,14 @@ folder. For the step-by-step curriculum see [`README.md`](README.md); for the fu
 [`../RESEARCH_PLAN.md`](../RESEARCH_PLAN.md).
 
 The project is **mostly linear (Phase 1 → 7)**, with **Phase 8 (Tools & Environment)
-front-loaded** alongside Phase 1. Everything traces back to one root cause — the **50× class
+front-loaded** alongside Phase 1. Everything traces back to one root cause — the **~138× class
 imbalance** — which spawns the **three pillars** (ADASYN, heterogeneous ensemble, triple XAI)
 that thread across multiple phases. A small **data lane** on the right shows how artifacts
-flow from raw OASIS to the final paper.
+flow from raw OASIS (`ninadaithal/imagesoasis`, ~86k slices) to the final paper.
 
 ```mermaid
 flowchart TD
-    ROOT["⚠️ Root cause:<br/>50× class imbalance<br/>(3200 Non-Dementia vs 64 Moderate)"]:::root
+    ROOT["⚠️ Root cause:<br/>~138× class imbalance<br/>(67,222 Non Demented vs 488 Moderate)"]:::root
 
     %% ---------- Phase 8 (front-loaded) ----------
     subgraph P8["Phase 8 · Tools & Environment (front-loaded)"]
@@ -47,7 +47,7 @@ flowchart TD
         direction TB
         P3S1["S1 OASIS EDA<br/>class distribution"]
         P3S2["S2 Preprocessing<br/>resize · gray→3ch · norm · augment"]
-        P3S3["S3 Stratified 80/10/10 split<br/>+ PyTorch Dataset"]
+        P3S3["S3 Subject-grouped 80/10/10 split<br/>(patient-level) + PyTorch Dataset"]
         P3S4["S4 Apply ADASYN<br/>after split · train-only (Pillar 1)"]:::adasyn
         P3S5["S5 Verify balance<br/>eyeball synthetic samples"]
         P3S1 --> P3S2 --> P3S3 --> P3S4 --> P3S5
@@ -139,7 +139,7 @@ flowchart TD
 
 | Element | Meaning |
 |---|---|
-| ⚠️ **Red node** | Root cause — the 50× class imbalance every decision traces back to |
+| ⚠️ **Red node** | Root cause — the ~138× class imbalance every decision traces back to |
 | 🟠 **Orange nodes** | **Pillar 1 — ADASYN** (designed P1·S2, applied P3·S4) |
 | 🔵 **Blue nodes** | **Pillar 2 — Heterogeneous ensemble** / weighted soft-voting by val-F1 (P1·S3 → P2·S2 → P4·S4) |
 | 🟣 **Purple nodes** | **Pillar 3 — Triple XAI** Grad-CAM + SHAP + LIME (surveyed P1·S4, produced Phase 5) |
