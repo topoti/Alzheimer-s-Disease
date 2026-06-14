@@ -29,13 +29,16 @@ Your contribution has three pillars:
 
 ### Concepts to internalize
 
-**Alzheimer's as a 4-class ML problem.** The OASIS dataset (`ninadaithal/imagesoasis`, ~86,437 slices from OASIS-1) labels each MRI slice into one of four severity stages:
-- **Non Demented (67,222 images)** — healthy brain
-- **Very mild Dementia (13,725 images)** — earliest detectable cognitive decline
-- **Mild Dementia (5,002 images)** — clear symptoms, manageable
-- **Moderate Dementia (488 images)** — significant impairment
+**Alzheimer's as a 4-class ML problem.** The OASIS dataset (`ninadaithal/imagesoasis`, ~86,437 slices from OASIS-1) labels each MRI slice into one of four severity stages. The counts below are *measured from this repo's `datasets/Data/`*, including **unique subjects** (parsed from the `OAS1_XXXX` filename prefix) — the number that actually governs how independently a class can be split and learned:
 
-The imbalance is **~138×** (67,222 ÷ 488) — even harsher than the reference paper's smaller export, which only strengthens the case for ADASYN.
+| Stage | Images | Unique subjects |
+|---|---|---|
+| **Non Demented** — healthy brain | 67,222 | 266 |
+| **Very mild Dementia** — earliest detectable decline | 13,725 | 58 |
+| **Mild Dementia** — clear symptoms, manageable | 5,002 | 21 |
+| **Moderate Dementia** — significant impairment | 488 | **2** |
+
+The *image* imbalance is **~138×** (67,222 ÷ 488) — harsher than the reference paper's smaller export. But the **decisive problem is at the subject level**: all 488 Moderate slices come from **only 2 patients**. No resampling can manufacture patient diversity that does not exist; ADASYN on 2 subjects only interpolates between 2 brains. This caps achievable, *honest* Moderate-class performance and is treated as a stated limitation rather than hidden behind a balanced-looking training set. See Phase 3 (split) and Risks.
 
 From an ML view, this is **ordinal multi-class classification** (the classes have an order: healthy → mild → moderate). You'll treat it as plain multi-class for now (4 mutually exclusive labels) because the reference paper does.
 
@@ -123,11 +126,16 @@ Three options exist:
 
 Why: if you ADASYN first then split, synthetic samples generated from a test image's neighbors leak into training → inflated test metrics → reviewer rejection.
 
-**On what features do we apply ADASYN?** Two options:
-- **Option A (recommended for beginners):** Flatten resized images (e.g., 64×64×1 = 4096 features), apply ADASYN in pixel space, reshape back. Fast, works, but synthetic samples may look slightly blurry.
-- **Option B (more rigorous):** Pass training images through a pretrained CNN, extract the penultimate-layer embedding (e.g., 2048-dim vector for ResNet50), apply ADASYN in that embedding space, train a classifier head on the resulting balanced embeddings. Cleaner but requires a separate embedding-extraction pass.
+**On what features do we apply ADASYN?**
+- **Main method — feature/embedding space:** Pass training images through a frozen pretrained CNN, extract the penultimate-layer embedding (e.g., 2048-dim for ResNet50), apply ADASYN in that embedding space, and train the classifier head on the resulting balanced embeddings. This avoids the blurry, unrealistic synthetic MRIs that pixel-space interpolation produces and is the version a reviewer will accept.
+- **Discarded alternative — pixel space:** Flatten resized images (e.g., 64×64×1 = 4096 features), ADASYN in pixel space, reshape back. Fast but produces blurry pseudo-MRIs; methodologically the weakest choice for images. Mention only as a rejected baseline, not the pipeline.
 
-**Decision: Option A for the main pipeline; mention Option B as an ablation.**
+**Decision: feature/embedding-space ADASYN is the main pipeline.**
+
+**Cap the oversampling target — do NOT balance to full majority.** Use `sampling_strategy` to bring minority classes up to a *moderate* fraction of the majority (e.g., Mild / Very-mild to ~25–50% of the majority count), and let the **class-balanced loss (Phase 4)** absorb the residual imbalance. Reasons:
+- Synthesizing ~50k Moderate vectors from 488 reals (2 subjects) just replicates 2 brains ~100× — pure memorization risk, no new information.
+- A fully-balanced ~215k-sample train set blows the Kaggle GPU budget for marginal gain.
+- Document the chosen ratio and **ablate it** (e.g., cap at 25% vs 50% vs full).
 
 ### Expected post-ADASYN training distribution
 
@@ -137,25 +145,31 @@ Starting (train ≈ 80% of 86,437 ≈ 69,000 slices; exact per-class counts shif
 - Mild Dementia: ~4,000
 - Moderate Dementia: ~390
 
-After ADASYN (target = match majority class):
-- All 4 classes: ~53,800 each → ~215,000 training samples total
-- Test set stays imbalanced (it must reflect reality)
+After **capped** feature-space ADASYN (target = a fraction of the majority, e.g. ~25–50%), illustrative:
+- Non Demented: ~53,800 (unchanged — majority is never oversampled)
+- Very mild Dementia: up to ~13,500–27,000 (already near/above the cap; little or no synthesis)
+- Mild Dementia: raised to ~13,500–27,000
+- Moderate Dementia: raised to the same cap **but flagged** — every synthetic point derives from 2 patients
+- Test (and val) set stays imbalanced (it must reflect reality)
 
-> **Scale note:** balancing all the way to the ~53,800 majority means ~50k synthetic Moderate samples from ~390 reals and a ~215k-image train set — heavy for pixel-space ADASYN *and* GPU quota. Use `sampling_strategy` to cap the target below full majority, and/or develop on a stratified subset first. Document the choice.
+The **residual** imbalance after the cap is handled by the class-balanced loss (Phase 4), not by more synthesis.
+
+> **Why not full balance:** balancing to the ~53,800 majority means ~50k synthetic Moderate samples from 488 reals (2 subjects) and a ~215k-image train set — pure memorization risk plus a GPU-quota blowout for marginal gain. The cap + weighted loss combination is both cheaper and more honest. Develop on a stratified subset first; document the cap and ablate it.
 
 ### Train/Val/Test split
 
 **Subject-level (patient-grouped), stratified, 80 / 10 / 10.** This OASIS export has **many slices per patient**, so a naive slice-level split leaks patients across train/test and inflates every metric. Split **patients, not slices**: build the unique-subject list (each subject has one class), split the *subjects* 80/10/10 stratified by class with `random_state=42` (`StratifiedGroupKFold`, or a manual stratified split of the subject list), then expand each subject to its slices. Save the subject→split assignment to disk and verify **no subject ID appears in two splits**.
 
-> **Rare-subject caveat:** the Moderate class may come from very few distinct patients, which limits how independently it can be split across train/val/test. Document exactly how the rare-class subjects were allocated — this is a stated limitation, not something to hide by silently reverting to slice-level splitting.
+> **Rare-subject caveat — Moderate has only 2 subjects (measured).** With 2 patients you *cannot* populate train/val/test disjointly. **Allocation: 1 subject → train, 1 subject → test, none in val.** Report Moderate test metrics explicitly as a **single held-out-patient probe** (effectively leave-one-subject-out), not a population estimate. Document this exactly; do **not** silently revert to slice-level splitting to make the numbers look better. The other classes (266 / 58 / 21 subjects) split normally 80/10/10 at the subject level.
 
 ### Checklist
 - [ ] Attach `ninadaithal/imagesoasis` to the Kaggle notebook; count images **and unique patients** per class (parse `OAS1_XXXX`)
 - [ ] Implement **subject-level** stratified 80/10/10 split → save subject→split assignment + indices to disk; verify no patient spans two splits
+- [ ] Verify Moderate = 1 subject in train, 1 in test, 0 in val; record the IDs
 - [ ] Build a PyTorch `Dataset` class that returns `(image_tensor, label)`
-- [ ] Apply ADASYN from `imblearn.over_sampling.ADASYN` on training subset only
-- [ ] Print class distribution before/after ADASYN — verify balance
-- [ ] Save a few synthetic samples as PNGs to visually sanity-check
+- [ ] Extract frozen-backbone embeddings for the training set; apply `imblearn.over_sampling.ADASYN` **in embedding space, training subset only, with a capped `sampling_strategy`**
+- [ ] Print class distribution before/after ADASYN — verify the cap, not full balance; confirm val/test untouched
+- [ ] For a few synthetic embeddings, find the nearest real training image to sanity-check plausibility
 
 ---
 
@@ -181,9 +195,12 @@ Analogy: stage 1 is like hiring a specialist consultant (the classifier head) to
 | LR scheduler | CosineAnnealingLR | Smooth decay, less tuning than step schedules |
 | Batch size | 32 (16 if OOM on Kaggle T4) | EfficientNetB3 may need 16 due to 300×300 input |
 | Epochs | 3 + 25 | Stage 1 + Stage 2 |
-| Loss | CrossEntropyLoss | Standard for multi-class |
+| Loss | **Class-balanced CE** (effective-number weights, Cui 2019) *or* **Focal loss** (γ≈2) | Replaces plain CE; biggest single lift in minority recall, no synthetic data |
+| Sampler | `WeightedRandomSampler` (class-aware) | Ensures minority slices appear in minibatches. **Pick one primary corrector** — don't stack heavy weighted loss + aggressive sampling + full oversampling; over-correction tanks majority precision. Ablate the combo |
+| Regularization mix | MixUp / CutMix on minority-heavy batches | Realistic variation ADASYN can't add; strong augment (rot ±10°, flips, affine, intensity jitter) |
+| Inference correction | Logit adjustment (Menon 2021) — shift logits by log prior | Near-free post-hoc lift to minority recall; tune threshold on val |
 | Weight decay | 1e-4 | Mild regularization |
-| Early stopping | Patience = 5 epochs on val F1 | Prevents overfitting |
+| Early stopping | Patience = 5 epochs on val **macro-F1** | Prevents overfitting; macro-F1 not accuracy |
 | Mixed precision | `torch.cuda.amp` | ~2× speedup on T4 |
 
 ### Ensemble construction
@@ -268,9 +285,11 @@ This is a real subtlety the reference paper sidesteps. Options:
 | **Precision (per class)** | Of all "Mild Dementia" predictions, how many were actually Mild? | Low precision = lots of false alarms → unnecessary patient anxiety |
 | **Recall / Sensitivity (per class)** | Of all actual Mild Dementia patients, how many did we catch? | **Most critical metric.** Missing a dementia case is far worse than a false alarm — patient goes undiagnosed |
 | **F1-Score (per class + macro)** | Harmonic mean of precision and recall | Single number that balances both. Macro-F1 (unweighted average across 4 classes) is the right "headline" metric for imbalanced medical data |
+| **Balanced accuracy** | Mean per-class recall | Honest single-number summary under 138× imbalance; report alongside plain accuracy |
 | **AUC-ROC (one-vs-rest)** | How well the model ranks positives above negatives, threshold-independent | Clinically useful because doctors may adjust the decision threshold for screening vs. diagnosis |
+| **PR-AUC (one-vs-rest)** | Area under precision–recall curve | More informative than ROC-AUC for the rare classes — ROC-AUC looks optimistic when negatives dominate |
 
-**Headline metric for the paper: Macro-F1 + per-class Recall + Confusion Matrix.** Accuracy reported but de-emphasized.
+**Headline metric for the paper: Macro-F1 + per-class Recall + Confusion Matrix** (plus balanced accuracy and per-class PR-AUC). Accuracy reported but de-emphasized.
 
 ### Confusion matrix interpretation (4-class)
 
@@ -349,7 +368,7 @@ Also run two **ablation studies**:
 - Why heterogeneous-paradigm ensemble helps (cite the uncorrelated-error theory)
 - Clinical implications of the XAI outputs
 - Limitations: all backbones are CNNs (acknowledge openly), 2D slices not 3D volumes, single dataset
-- Threats to validity: note the **patient-level (subject-grouped) split** used to avoid slice leakage (a strength), but the **Moderate class draws on very few unique subjects**, limiting independent evaluation; pixel-space ADASYN can blur synthetics
+- Threats to validity: note the **patient-level (subject-grouped) split** used to avoid slice leakage (a strength), but the **Moderate class draws on only 2 unique subjects** (measured) — so its test metric is a single-held-out-patient probe, not a population estimate, and resampling cannot fix this; feature-space ADASYN avoids the blur of pixel-space synthetics but still interpolates within those 2 brains
 
 **7. Conclusion + Future Work (~0.5 page)** — Summarize contributions, list future work (CNN + Transformer ensemble, 3D volumetric input, multi-site validation, prospective clinical study).
 
@@ -500,7 +519,9 @@ alzheimer-ensemble/
 | Risk | Mitigation |
 |---|---|
 | Reviewer attacks "cross-architecture" framing | Already mitigated — title says "heterogeneous-paradigm CNN"; acknowledge CNN-only limit in Discussion + Future Work |
-| Moderate-class recall stays low even with ADASYN | Try class-weighted loss in addition to ADASYN; try focal loss; expand to OASIS-2 or ADNI if needed |
+| **Moderate class has only 2 unique subjects** | **Unfixable by resampling** — state openly as primary limitation; use 1-train/1-test single-patient evaluation; offer OASIS-2/3 or ADNI as future work to add Moderate patients |
+| Reviewer attacks pixel-space ADASYN as unrealistic | Already mitigated — feature/embedding-space ADASYN is now the main pipeline (Phase 3); pixel-space kept only as a rejected baseline |
+| Moderate-class recall stays low even with ADASYN | Class-balanced (effective-number) or focal loss in addition to capped ADASYN; logit adjustment at inference; expand to OASIS-2/ADNI if needed |
 | Kaggle session timeouts during training | Save checkpoint every epoch; resume from last checkpoint; run shorter epochs initially |
 | ADASYN on pixel space produces noisy synthetic samples | Switch to embedding-space ADASYN (Option B from Phase 3) |
 | Three-model ensemble overfits / memorizes patients (~86k images, many per subject) | Patient-grouped split (already adopted); heavier dropout (0.5), stronger augmentation, k-fold cross-validation |
