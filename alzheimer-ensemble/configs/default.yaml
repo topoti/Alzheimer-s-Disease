@@ -1,7 +1,7 @@
 seed: 42
 
 data:
-  root: /kaggle/input/alzheimer-mri-disease-classification-dataset
+  root: /kaggle/input/imagesoasis/Data   # ninadaithal/imagesoasis (OASIS-1 export)
   num_classes: 4
   class_names: [non_dementia, very_mild_dementia, mild_dementia, moderate_dementia]
   split:
@@ -9,6 +9,8 @@ data:
     val: 0.1
     test: 0.1
     stratify: true
+    group_by: subject        # patient-level (OAS1_XXXX) grouped split — NEVER slice-level
+    random_state: 42
   input_sizes:
     resnet50: 224
     densenet121: 224
@@ -19,42 +21,61 @@ data:
 
 adasyn:
   enabled: true
-  apply_on: pixel_space        # pixel_space | embedding_space
-  flatten_size: 64             # 64x64 grayscale for pixel-space ADASYN
-  sampling_strategy: not_majority
+  apply_on: embedding_space    # LOCKED main pipeline (pixel_space kept only as a rejected baseline)
+  embedding_backbone: resnet50 # frozen backbone for penultimate-layer embeddings
+  sampling_strategy: 0.5       # CAP minorities to a fraction of majority (ablate 0.25 / 0.5 / full)
   n_neighbors: 5
   random_state: 42
 
 augmentation:
-  rotation_deg: 10
+  rotation_deg: 10             # ±10°
   horizontal_flip: true
-  brightness_jitter: 0.1
-  noise_removal: gaussian      # gaussian | median | none
+  brightness_jitter: 0.1       # ±10%
+  affine: true
+  intensity_jitter: 0.1
+  noise_removal: gaussian      # gaussian | median | none (ablate)
   gaussian_sigma: 0.5
+  mixup: true                  # MixUp / CutMix on minority-heavy batches
+  cutmix: true
 
+# ---- Phase 4 training hyperparameters ----
 training:
-  batch_size: 32
-  batch_size_effnet: 16
+  batch_size: 32               # 16 if OOM on Kaggle T4
+  batch_size_effnet: 16        # EfficientNetB3 @ 300x300 may need 16
   num_workers: 2
-  mixed_precision: true
-  stage1_epochs: 3
-  stage2_epochs: 25
+  mixed_precision: true        # torch.cuda.amp — ~2x speedup on T4
+  stage1_epochs: 3             # feature extraction: freeze backbone, train head only
+  stage2_epochs: 25            # fine-tune last 2 backbone blocks + head
   early_stopping_patience: 5
-  loss: cross_entropy
+  early_stopping_metric: macro_f1   # patience on val macro-F1, not accuracy
+
+loss:
+  name: class_balanced_ce      # class_balanced_ce (effective-number, Cui 2019) | focal
+  focal_gamma: 2.0             # γ≈2 if using focal loss
+  cb_beta: 0.999               # effective-number beta for class-balanced CE
+
+sampler:
+  name: weighted_random        # class-aware WeightedRandomSampler
+  # Pick ONE primary corrector — don't stack heavy weighted loss + aggressive sampler
+  # + full oversampling; over-correction tanks majority precision. Ablate the combo.
 
 optimizer:
   name: adamw
-  lr_head: 1.0e-3
-  lr_backbone: 1.0e-4
+  lr_head: 1.0e-3              # head-only stage
+  lr_backbone: 1.0e-4          # fine-tune stage (10x smaller)
   weight_decay: 1.0e-4
 
 scheduler:
-  name: cosine_annealing
+  name: cosine_annealing       # CosineAnnealingLR
   t_max: 25
+
+inference:
+  logit_adjustment: true       # Menon 2021 — shift logits by log prior
+  tune_threshold_on: val
 
 ensemble:
   method: weighted_soft_voting
-  weight_metric: val_f1_macro  # weights = normalized val F1 per model
+  weight_metric: val_f1_macro  # weights = normalized per-model val macro-F1 (sum to 1)
 
 xai:
   gradcam:
@@ -63,6 +84,7 @@ xai:
       densenet121: features.denseblock4
       efficientnetb3: blocks.6
     samples_per_class: 10      # 5 correct + 5 incorrect
+    aggregate: average         # pixel-wise average of the 3 normalized heatmaps
   shap:
     explainer: GradientExplainer
     num_samples: 20
@@ -73,5 +95,6 @@ xai:
     num_segments: 50
 
 evaluation:
-  metrics: [accuracy, macro_f1, per_class_precision, per_class_recall, auc_roc_ovr]
+  metrics: [accuracy, balanced_accuracy, macro_f1, per_class_precision,
+            per_class_recall, auc_roc_ovr, pr_auc_ovr]
   headline_metric: macro_f1

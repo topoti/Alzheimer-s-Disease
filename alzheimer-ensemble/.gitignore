@@ -1,0 +1,12 @@
+# Raw data and model weights (large; regenerated/downloaded, never committed)
+data/raw/
+checkpoints/
+*.pth
+*.pt
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Experiment tracking
+wandb/
