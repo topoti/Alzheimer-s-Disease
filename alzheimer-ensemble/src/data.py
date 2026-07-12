@@ -1,474 +1,200 @@
-"""Dataset, patient-level split, transforms, and dataloaders for the OASIS MRI 4-class task.
+"""Data layer for the OASIS MRI 4-class task (Phase 3).
 
-The single most important design choice here is the **subject-disjoint (patient-grouped)
-split**. The OASIS export has many 2D slices per patient (filenames keep the
-``OAS1_XXXX`` subject prefix). A naive slice-level split leaks the same patient's
-brain into train *and* test, which inflates every metric — the reason a lot of OASIS
-papers report dishonest ~99% numbers. We split *subjects*, then expand to slices, and
-assert that no subject ID appears in two splits.
+This module is intentionally narrow — it owns three things and nothing else:
 
-Measured class/subject counts in this repo's ``datasets/Data/``:
+* :func:`parse_subject_id` — pull the ``OAS1_XXXX`` patient ID out of a slice filename.
+* :class:`OasisDataset` — a ``torch`` ``Dataset`` that turns ``(root, file_list, labels)``
+  into ``(image_tensor, label)`` pairs, applying the Phase 3 preprocessing pipeline.
+* :func:`get_transforms` — build the albumentations pipeline for a given input size.
 
-    Class                 Images   Unique subjects
-    Non Demented          67,222   266
-    Very mild Dementia    13,725    58
-    Mild Dementia          5,002    21
-    Moderate Dementia        488     2   <-- only TWO patients
+The **patient-level split** (which subjects go to train/val/test) lives in ``src/split.py``,
+not here; this module just consumes the file lists that the split produces. Dataloaders are
+assembled at the call site (the training notebook / ``src/train.py``) from an
+:class:`OasisDataset` plus the split's per-class file lists.
 
-With only 2 Moderate subjects a disjoint train/val/test split is impossible for that
-class. We therefore allocate Moderate as **1 subject -> train, 1 subject -> test, none
-in val**, and its test metric must be read as a single-held-out-patient probe, not a
-population estimate. See RESEARCH_PLAN.md (Phase 3, split) for the rationale.
+Preprocessing pipeline (RESEARCH_PLAN.md, Phase 3):
+    1. load slice
+    2. resize to ``input_size`` (224 for ResNet50/DenseNet121, 300 for EfficientNetB3)
+    3. grayscale -> duplicate to 3 channels (ImageNet backbones expect RGB)
+    4. ImageNet normalization
+    5. *train only* — light online augmentation: rotation ±10°, horizontal flip,
+       brightness ±10%
 
-Run directly to build and persist the split::
-
-    python -m src.data                      # uses configs/default.yaml + local datasets/
-    python -m src.data --data-root /path    # override the image root
+Heavy dependencies (albumentations, cv2, torch, PIL) are imported lazily inside the
+functions/methods so that lightweight consumers — e.g. ``src/split.py`` importing only
+:func:`parse_subject_id` — do not have to load the deep-learning stack.
 """
 
 from __future__ import annotations
 
-import argparse
 import re
-from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Sequence, Tuple, Union
 
 import numpy as np
-import pandas as pd
-import yaml
 
-# NOTE: torch / torchvision / PIL are imported lazily inside the transform/Dataset/loader
-# helpers below, so the split-building path (build_index -> split_subjects -> save_splits,
-# i.e. `python -m src.data`) runs in a lightweight env without the deep-learning stack.
+# Subclass torch's Dataset when torch is available, but fall back to ``object`` so that
+# lightweight consumers (e.g. ``src/split.py`` importing only :func:`parse_subject_id`) can
+# import this module without the deep-learning stack installed. ``OasisDataset`` is only
+# ever *instantiated* where torch is present.
+try:  # pragma: no cover - depends on environment
+    from torch.utils.data import Dataset as _DatasetBase
+except ImportError:  # pragma: no cover
+    _DatasetBase = object  # type: ignore[assignment,misc]
 
-# --------------------------------------------------------------------------------------
-# Paths and constants
-# --------------------------------------------------------------------------------------
+# ImageNet statistics — the backbones are ImageNet-pretrained, so inputs must be normalized
+# with the same mean/std the weights were trained under.
+IMAGENET_MEAN: Tuple[float, float, float] = (0.485, 0.456, 0.406)
+IMAGENET_STD: Tuple[float, float, float] = (0.229, 0.224, 0.225)
 
-REPO_ROOT = Path(__file__).resolve().parents[1]          # .../alzheimer-ensemble
-PROJECT_ROOT = REPO_ROOT.parent                          # .../Alzheimer-s-Disease
-DEFAULT_CONFIG_PATH = REPO_ROOT / "configs" / "default.yaml"
-DEFAULT_SPLITS_DIR = REPO_ROOT / "data" / "splits"
-# Local image root (used when the config's Kaggle path is absent).
-LOCAL_DATA_ROOT = PROJECT_ROOT / "datasets" / "Data"
+# The two locked input sizes (RESEARCH_PLAN.md, Phase 2). ``input_size`` is a plain int
+# parameter everywhere in this module, so any value works; these name the canonical two.
+INPUT_SIZE_DEFAULT = 224          # ResNet50, DenseNet121
+INPUT_SIZE_EFFICIENTNET = 300     # EfficientNetB3
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+# Augmentation magnitudes (train only), per Phase 3.
+_ROTATION_LIMIT_DEG = 10
+_BRIGHTNESS_LIMIT = 0.1           # ±10%
+
 SUBJECT_RE = re.compile(r"(OAS1_\d+)", re.IGNORECASE)
 
-# Map a normalized class-folder name -> (canonical name, integer label).
-# Folder names differ slightly between exports ("Non Demented", "NonDemented", ...),
-# so we normalize to lowercase-letters-only before matching.
-CLASS_BY_NORMALIZED: Dict[str, Tuple[str, int]] = {
-    "nondemented": ("non_dementia", 0),
-    "nondementia": ("non_dementia", 0),
-    "verymilddementia": ("very_mild_dementia", 1),
-    "verymilddemented": ("very_mild_dementia", 1),
-    "milddementia": ("mild_dementia", 2),
-    "milddemented": ("mild_dementia", 2),
-    "moderatedementia": ("moderate_dementia", 3),
-    "moderatedemented": ("moderate_dementia", 3),
-}
-CLASS_NAMES = ["non_dementia", "very_mild_dementia", "mild_dementia", "moderate_dementia"]
 
+def parse_subject_id(filename: str) -> str:
+    """Extract the ``OAS1_XXXX`` patient (subject) ID from an OASIS slice filename.
 
-def _normalize_class_name(name: str) -> str:
-    return re.sub(r"[^a-z]", "", name.lower())
+    OASIS filenames keep the source subject prefix (e.g.
+    ``OAS1_0001_MR1_mpr-1_100.jpg``), so the ``OAS1_XXXX`` token identifies the patient.
+    This ID is what the patient-level split groups on, so a slice can never leak the same
+    brain across train/val/test.
 
+    Args:
+        filename: A slice filename or path (only the basename is inspected).
 
-# --------------------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------------------
+    Returns:
+        The subject ID in upper case, e.g. ``"OAS1_0001"``.
 
-
-def load_config(path: Path = DEFAULT_CONFIG_PATH) -> dict:
-    """Load the YAML config as a plain dict."""
-    with open(path, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh)
-
-
-def resolve_data_root(config: dict, override: Optional[str] = None) -> Path:
-    """Pick the image root: CLI override > config path (if it exists) > local datasets/Data."""
-    if override:
-        root = Path(override)
-        if not root.exists():
-            raise FileNotFoundError(f"--data-root does not exist: {root}")
-        return root
-    cfg_root = Path(config.get("data", {}).get("root", ""))
-    if cfg_root.exists():
-        return cfg_root
-    if LOCAL_DATA_ROOT.exists():
-        return LOCAL_DATA_ROOT
-    raise FileNotFoundError(
-        f"Could not locate image root. Tried config root '{cfg_root}' and "
-        f"local '{LOCAL_DATA_ROOT}'. Pass --data-root explicitly."
-    )
-
-
-# --------------------------------------------------------------------------------------
-# Index building: scan files -> (filepath, label, subject) records
-# --------------------------------------------------------------------------------------
-
-
-def parse_subject_id(filename: str) -> Optional[str]:
-    """Extract the ``OAS1_XXXX`` subject (patient) ID from a slice filename."""
-    match = SUBJECT_RE.search(filename)
-    return match.group(1).upper() if match else None
-
-
-def build_index(data_root: Path) -> pd.DataFrame:
-    """Scan the dataset directory into a slice-level DataFrame.
-
-    Returns columns: ``filepath, class_name, label, subject_id``.
-    Raises if any class folder is unrecognized or a file has no parseable subject.
+    Raises:
+        ValueError: If no ``OAS1_XXXX`` token is present.
     """
-    data_root = Path(data_root)
-    records: List[dict] = []
-    unmatched_dirs: List[str] = []
-
-    class_dirs = sorted(p for p in data_root.iterdir() if p.is_dir())
-    if not class_dirs:
-        raise FileNotFoundError(f"No class sub-directories found under {data_root}")
-
-    for class_dir in class_dirs:
-        mapping = CLASS_BY_NORMALIZED.get(_normalize_class_name(class_dir.name))
-        if mapping is None:
-            unmatched_dirs.append(class_dir.name)
-            continue
-        class_name, label = mapping
-        for img_path in class_dir.iterdir():
-            if img_path.suffix.lower() not in IMAGE_EXTENSIONS:
-                continue
-            subject = parse_subject_id(img_path.name)
-            if subject is None:
-                raise ValueError(
-                    f"Could not parse OAS1 subject ID from filename: {img_path.name}"
-                )
-            records.append(
-                {
-                    "filepath": str(img_path),
-                    "class_name": class_name,
-                    "label": label,
-                    "subject_id": subject,
-                }
-            )
-
-    if unmatched_dirs:
-        raise ValueError(
-            f"Unrecognized class folder(s): {unmatched_dirs}. "
-            f"Add them to CLASS_BY_NORMALIZED in src/data.py."
-        )
-    if not records:
-        raise ValueError(f"No images found under {data_root}")
-
-    df = pd.DataFrame.from_records(records)
-
-    # Sanity: each subject must belong to exactly one class.
-    multi = df.groupby("subject_id")["label"].nunique()
-    bad = multi[multi > 1]
-    if len(bad):
-        raise ValueError(f"{len(bad)} subject(s) span multiple classes, e.g. {list(bad.index[:5])}")
-
-    return df
+    match = SUBJECT_RE.search(Path(filename).name)
+    if match is None:
+        raise ValueError(f"Could not parse an OAS1_XXXX subject ID from: {filename!r}")
+    return match.group(1).upper()
 
 
-# --------------------------------------------------------------------------------------
-# Patient-level split
-# --------------------------------------------------------------------------------------
+def get_transforms(input_size: int, train: bool):
+    """Build the albumentations transform pipeline for one split.
 
+    Val/test pipelines contain only the deterministic steps (resize + normalize) so that
+    reported metrics reflect the real image. Training adds light, label-preserving online
+    augmentation (rotation ±10°, horizontal flip, brightness ±10%).
 
-def split_subjects(
-    index: pd.DataFrame,
-    ratios: Tuple[float, float, float] = (0.8, 0.1, 0.1),
-    seed: int = 42,
-) -> Dict[str, str]:
-    """Assign each subject to 'train' / 'val' / 'test', stratified by class.
+    The grayscale→3-channel duplication is handled in :meth:`OasisDataset.__getitem__`
+    (the image is already 3-channel by the time it reaches this pipeline), so normalization
+    here uses the 3-channel ImageNet statistics.
 
-    Splitting is done *per class* (which guarantees stratification) on the unique
-    subject list, so no subject can land in two splits. Rare classes get explicit
-    fallbacks because the ratios cannot be honored:
+    Args:
+        input_size: Target square side length in pixels (e.g. 224 or 300).
+        train: If ``True``, include augmentation; otherwise resize + normalize only.
 
-      * 1 subject  -> train only (warns; class is untestable)
-      * 2 subjects -> 1 train, 1 test, 0 val (the Moderate case)
-      * >=3        -> rounded 80/10/10 with >=1 subject in each split
+    Returns:
+        An ``albumentations.Compose`` that maps ``image=<HxWx3 uint8 array>`` to a
+        normalized ``CxHxW`` float tensor.
     """
-    train_r, val_r, _test_r = ratios
-    rng = np.random.default_rng(seed)
-    assignment: Dict[str, str] = {}
+    import albumentations as A
+    import cv2
+    from albumentations.pytorch import ToTensorV2
 
-    subjects_by_class: Dict[int, List[str]] = defaultdict(list)
-    for subject, label in index.groupby("subject_id")["label"].first().items():
-        subjects_by_class[int(label)].append(subject)
+    steps: List = [A.Resize(height=input_size, width=input_size)]
 
-    for label in sorted(subjects_by_class):
-        subjects = sorted(subjects_by_class[label])          # deterministic order
-        perm = rng.permutation(len(subjects))
-        subjects = [subjects[i] for i in perm]                # seeded shuffle
-        n = len(subjects)
-
-        if n == 1:
-            splits = ["train"]
-            print(
-                f"  [warn] class '{CLASS_NAMES[label]}' has 1 subject -> train only; "
-                f"it cannot be evaluated."
-            )
-        elif n == 2:
-            splits = ["train", "test"]
-            print(
-                f"  [warn] class '{CLASS_NAMES[label]}' has 2 subjects -> "
-                f"1 train / 1 test / 0 val (single-held-out-patient probe)."
-            )
-        else:
-            n_train = max(1, round(train_r * n))
-            n_val = max(1, round(val_r * n))
-            n_test = n - n_train - n_val
-            if n_test < 1:                                    # borrow from train
-                n_test = 1
-                n_train = n - n_val - n_test
-            splits = ["train"] * n_train + ["val"] * n_val + ["test"] * n_test
-
-        for subject, split in zip(subjects, splits):
-            assignment[subject] = split
-
-    return assignment
-
-
-def apply_split(index: pd.DataFrame, assignment: Dict[str, str]) -> pd.DataFrame:
-    """Attach a 'split' column to the slice-level index from the subject assignment."""
-    out = index.copy()
-    out["split"] = out["subject_id"].map(assignment)
-    if out["split"].isna().any():
-        missing = out.loc[out["split"].isna(), "subject_id"].unique()[:5]
-        raise ValueError(f"Subjects without a split assignment, e.g. {list(missing)}")
-    return out
-
-
-def verify_no_leakage(index: pd.DataFrame) -> None:
-    """Assert subjects are disjoint across splits; raise loudly if not."""
-    by_split = {s: set(g["subject_id"]) for s, g in index.groupby("split")}
-    splits = list(by_split)
-    for i in range(len(splits)):
-        for j in range(i + 1, len(splits)):
-            overlap = by_split[splits[i]] & by_split[splits[j]]
-            if overlap:
-                raise AssertionError(
-                    f"Subject leakage between {splits[i]} and {splits[j]}: "
-                    f"{sorted(overlap)[:5]}"
-                )
-
-
-def summarize_split(index: pd.DataFrame) -> pd.DataFrame:
-    """Per-split, per-class counts of slices and unique subjects (for printing/logging)."""
-    rows = []
-    for (split, label), g in index.groupby(["split", "label"]):
-        rows.append(
-            {
-                "split": split,
-                "class": CLASS_NAMES[int(label)],
-                "slices": len(g),
-                "subjects": g["subject_id"].nunique(),
-            }
-        )
-    summary = pd.DataFrame(rows)
-    order = {"train": 0, "val": 1, "test": 2}
-    return summary.sort_values(
-        by=["split", "class"], key=lambda s: s.map(order).fillna(s) if s.name == "split" else s
-    ).reset_index(drop=True)
-
-
-# --------------------------------------------------------------------------------------
-# Persistence
-# --------------------------------------------------------------------------------------
-
-
-def save_splits(index: pd.DataFrame, splits_dir: Path = DEFAULT_SPLITS_DIR) -> None:
-    """Persist the slice-level index and the subject->split table to CSV."""
-    splits_dir = Path(splits_dir)
-    splits_dir.mkdir(parents=True, exist_ok=True)
-    index.to_csv(splits_dir / "slice_index.csv", index=False)
-    subject_table = (
-        index.groupby("subject_id")
-        .agg(class_name=("class_name", "first"), label=("label", "first"), split=("split", "first"))
-        .reset_index()
-        .sort_values(["split", "label", "subject_id"])
-    )
-    subject_table.to_csv(splits_dir / "subject_split.csv", index=False)
-
-
-def load_splits(splits_dir: Path = DEFAULT_SPLITS_DIR) -> pd.DataFrame:
-    """Load a previously saved slice-level index (so training reuses one fixed split)."""
-    path = Path(splits_dir) / "slice_index.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"No saved split at {path}. Run `python -m src.data` first.")
-    return pd.read_csv(path)
-
-
-# --------------------------------------------------------------------------------------
-# Transforms + Dataset + DataLoaders
-# --------------------------------------------------------------------------------------
-
-
-def build_transforms(
-    input_size: int,
-    train: bool,
-    normalize_mean: Sequence[float],
-    normalize_std: Sequence[float],
-    aug: Optional[dict] = None,
-):
-    """Build a torchvision transform pipeline.
-
-    MRIs are grayscale; pretrained ImageNet backbones expect 3 channels, so we replicate
-    the gray channel. Train transforms add light, label-preserving augmentation; val/test
-    use only resize + normalize so metrics reflect the real image.
-    """
-    from torchvision import transforms
-
-    aug = aug or {}
-    steps: List = [
-        transforms.Grayscale(num_output_channels=3),
-        transforms.Resize((input_size, input_size)),
-    ]
     if train:
-        rot = aug.get("rotation_deg", 0)
-        if rot:
-            steps.append(transforms.RandomRotation(rot))
-        if aug.get("horizontal_flip", False):
-            steps.append(transforms.RandomHorizontalFlip())
-        bright = aug.get("brightness_jitter", 0)
-        if bright:
-            steps.append(transforms.ColorJitter(brightness=bright))
-        if aug.get("noise_removal") == "gaussian":
-            sigma = aug.get("gaussian_sigma", 0.5)
-            steps.append(transforms.GaussianBlur(kernel_size=3, sigma=(sigma, sigma)))
+        steps += [
+            # Rotate on a black (0) background — natural for MRI, which sits on black.
+            A.Rotate(
+                limit=_ROTATION_LIMIT_DEG,
+                border_mode=cv2.BORDER_CONSTANT,
+                value=0,
+                p=0.5,
+            ),
+            A.HorizontalFlip(p=0.5),
+            # Brightness only (contrast_limit=0) to match the ±10% brightness jitter.
+            A.RandomBrightnessContrast(
+                brightness_limit=_BRIGHTNESS_LIMIT,
+                contrast_limit=0.0,
+                p=0.5,
+            ),
+        ]
+
     steps += [
-        transforms.ToTensor(),
-        transforms.Normalize(mean=list(normalize_mean), std=list(normalize_std)),
+        A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ToTensorV2(),
     ]
-    return transforms.Compose(steps)
+    return A.Compose(steps)
 
 
-def _make_dataset(frame: pd.DataFrame, transform):
-    """Construct an OASISDataset (defined lazily so torch isn't needed for splitting)."""
-    from torch.utils.data import Dataset
-    from PIL import Image
+class OasisDataset(_DatasetBase):
+    """A ``torch`` ``Dataset`` yielding ``(image_tensor, label)`` for OASIS MRI slices.
 
-    class OASISDataset(Dataset):
-        """Returns ``(image_tensor, label)`` for one MRI slice."""
+    Given the paths and labels for one split, this applies the Phase 3 preprocessing
+    pipeline and returns a normalized ``3xHxW`` float tensor plus the integer label.
 
-        def __init__(self, frame: pd.DataFrame, transform):
-            self.filepaths = frame["filepath"].tolist()
-            self.labels = frame["label"].astype(int).tolist()
-            self.transform = transform
-
-        def __len__(self) -> int:
-            return len(self.filepaths)
-
-        def __getitem__(self, idx: int):
-            image = Image.open(self.filepaths[idx]).convert("L")  # force single-channel read
-            return self.transform(image), self.labels[idx]
-
-    return OASISDataset(frame, transform)
-
-
-def make_weighted_sampler(labels: Sequence[int]):
-    """Inverse-frequency sampler so minority classes appear often in minibatches.
-
-    Note: this is *one* imbalance corrector. Don't combine it at full strength with a
-    heavy class-weighted loss AND full oversampling — see RESEARCH_PLAN.md (Phase 4).
+    Args:
+        root: Base directory prepended to each entry in ``file_list`` (entries that are
+            already absolute or already exist are used as-is).
+        file_list: Slice filenames or paths, one per sample.
+        labels: Integer class labels aligned with ``file_list``.
+        input_size: Target square side length (224 for ResNet50/DenseNet121, 300 for
+            EfficientNetB3).
+        train: If ``True``, apply online augmentation; otherwise deterministic transforms.
     """
-    from torch.utils.data import WeightedRandomSampler
 
-    labels = np.asarray(labels)
-    class_counts = np.bincount(labels, minlength=len(CLASS_NAMES))
-    inv = 1.0 / np.clip(class_counts, 1, None)
-    sample_weights = inv[labels]
-    return WeightedRandomSampler(
-        weights=sample_weights.tolist(), num_samples=len(labels), replacement=True
-    )
+    def __init__(
+        self,
+        root: Union[str, Path],
+        file_list: Sequence[str],
+        labels: Sequence[int],
+        input_size: int,
+        train: bool = True,
+    ) -> None:
+        if len(file_list) != len(labels):
+            raise ValueError(
+                f"file_list and labels length mismatch: {len(file_list)} vs {len(labels)}"
+            )
+        self.root = Path(root)
+        self.file_list: List[str] = list(file_list)
+        self.labels: List[int] = [int(x) for x in labels]
+        self.input_size = int(input_size)
+        self.train = bool(train)
+        self.transform = get_transforms(self.input_size, self.train)
 
+    def __len__(self) -> int:
+        return len(self.file_list)
 
-def build_dataloaders(
-    index: pd.DataFrame,
-    input_size: int,
-    config: dict,
-    use_weighted_sampler: bool = False,
-    batch_size: Optional[int] = None,
-) -> Dict[str, "object"]:
-    """Build train/val/test dataloaders for a given backbone input size.
+    def _resolve_path(self, entry: str) -> Path:
+        """Resolve a ``file_list`` entry against ``root`` (absolute/existing kept as-is)."""
+        p = Path(entry)
+        if p.is_absolute() or p.exists():
+            return p
+        return self.root / entry
 
-    ``input_size`` is per-model (224 for ResNet/DenseNet, 300 for EfficientNetB3), so call
-    this once per backbone. Val/test never use augmentation or the weighted sampler.
-    """
-    from torch.utils.data import DataLoader
+    def __getitem__(self, idx: int) -> Tuple["object", int]:
+        from PIL import Image
 
-    norm = config["data"]["normalize"]
-    aug = config.get("augmentation", {})
-    train_cfg = config.get("training", {})
-    batch_size = batch_size or train_cfg.get("batch_size", 32)
-    num_workers = train_cfg.get("num_workers", 2)
-
-    loaders: Dict[str, object] = {}
-    for split in ("train", "val", "test"):
-        frame = index[index["split"] == split]
-        if frame.empty:
-            continue
-        is_train = split == "train"
-        tfm = build_transforms(input_size, is_train, norm["mean"], norm["std"], aug)
-        dataset = _make_dataset(frame, tfm)
-
-        sampler = None
-        shuffle = False
-        if is_train:
-            if use_weighted_sampler:
-                sampler = make_weighted_sampler(frame["label"].tolist())
-            else:
-                shuffle = True
-
-        loaders[split] = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            shuffle=shuffle,
-            num_workers=num_workers,
-            pin_memory=True,
-            drop_last=is_train,
-        )
-    return loaders
+        path = self._resolve_path(self.file_list[idx])
+        # Force single-channel read, then duplicate to 3 channels so ImageNet-pretrained
+        # backbones (which expect RGB) receive the grayscale MRI in every channel.
+        gray = np.array(Image.open(path).convert("L"), dtype=np.uint8)  # (H, W)
+        rgb = np.stack([gray, gray, gray], axis=-1)                     # (H, W, 3)
+        image = self.transform(image=rgb)["image"]                     # (3, H, W) float
+        return image, self.labels[idx]
 
 
-# --------------------------------------------------------------------------------------
-# Script entry point: build + verify + save the split
-# --------------------------------------------------------------------------------------
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the patient-level OASIS split.")
-    parser.add_argument("--data-root", default=None, help="Override the image root directory.")
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="Path to YAML config.")
-    parser.add_argument("--splits-dir", default=str(DEFAULT_SPLITS_DIR), help="Where to save CSVs.")
-    args = parser.parse_args()
-
-    config = load_config(Path(args.config))
-    seed = config.get("seed", 42)
-    split_cfg = config["data"]["split"]
-    ratios = (split_cfg["train"], split_cfg["val"], split_cfg["test"])
-
-    data_root = resolve_data_root(config, args.data_root)
-    print(f"Scanning images under: {data_root}")
-    index = build_index(data_root)
-    print(f"Found {len(index):,} slices across {index['subject_id'].nunique()} subjects.")
-
-    assignment = split_subjects(index, ratios=ratios, seed=seed)
-    index = apply_split(index, assignment)
-    verify_no_leakage(index)
-    print("Subject-disjoint split verified (no patient appears in two splits).\n")
-
-    summary = summarize_split(index)
-    print(summary.to_string(index=False))
-
-    save_splits(index, Path(args.splits_dir))
-    print(f"\nSaved split to {Path(args.splits_dir)}")
-
-
-if __name__ == "__main__":
-    main()
+__all__ = [
+    "parse_subject_id",
+    "get_transforms",
+    "OasisDataset",
+    "IMAGENET_MEAN",
+    "IMAGENET_STD",
+    "INPUT_SIZE_DEFAULT",
+    "INPUT_SIZE_EFFICIENTNET",
+]
