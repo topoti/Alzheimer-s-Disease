@@ -1,0 +1,25 @@
+Who AM I:
+I am going to do my research on alzeimers disease prediction. 
+
+Input:
+I have 4 type of dataset : no, very_mild, mild, moderate . 
+
+| Stage | Images | Unique subjects |
+|---|---|---|
+| **Non Demented** — healthy brain | 67,222 | 266 |
+| **Very mild Dementia** — earliest detectable decline | 13,725 | 58 |
+| **Mild Dementia** — clear symptoms, manageable | 5,002 | 21 |
+| **Moderate Dementia** — significant impairment | 488 | **2** |
+
+The "No" set is large, the "moderate" set is very small. I am planning to augment my smaller sets to avoid overfitting. Also, there is high possibility that these 4 classes may have the same patient's data. I have read about adasyn , that looks to be a good method for me. 
+.
+Now, you are going to question me of various cases that you can think of. You are the critic & my research-helper. 
+
+Your goal: Understand what am I going to do. What tools to choose. What model to implement. What hyper-parameters to use. And the feasibilty of my research. Also the splitting of the data for training/testing/validation.
+
+
+My concern:
+- Dataset is smaller on 2 sections.
+- I am not pro in ML. Lacks in basics.
+- Same patient data in multiple sets.
+- augmentation may overfit eventually.
