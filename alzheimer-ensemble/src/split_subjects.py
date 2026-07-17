@@ -23,9 +23,15 @@ Usage
 Outputs (under ``--out-dir``, default ``data/splits/``)
 -------------------------------------------------------
 * ``subject_split_3class.csv`` — one row per subject:
-  ``subject_id, orig_class, class_name, label, split, fold``
+  ``subject_id, orig_class, label, fold``
 * ``slice_index_3class.csv``   — one row per image:
-  ``filepath, subject_id, orig_class, class_name, label, split, fold``
+  ``filepath, subject_id, orig_class, label, fold``
+
+``fold`` is the whole partition: ``-1`` = held-out test, ``0..k-1`` = CV folds
+(the fold that acts as validation on run ``fold``). ``label`` is the 3-class
+target (0/1/2); the human-readable class name is a 1:1 function of it, so it is
+not stored. ``orig_class`` is kept because it is NOT recoverable from ``label``
+(it distinguishes the pre-merge ``mild`` vs ``moderate`` subjects).
 
 Only stdlib + pandas + scikit-learn are needed (no torch), so this runs on the
 CPU-only local machine before any GPU time is spent on Kaggle/Colab.
@@ -135,7 +141,13 @@ def build_subject_table(slices: pd.DataFrame) -> pd.DataFrame:
 
 def assign_split(subjects: pd.DataFrame, test_frac: float, n_folds: int,
                  seed: int) -> pd.DataFrame:
-    """Add ``split`` (test/dev) and ``fold`` (-1 for test, 0..k-1 for dev)."""
+    """Add ``fold``: ``-1`` = held-out test, ``0..k-1`` = the k CV folds.
+
+    A single ``fold`` column carries the whole partition — ``fold == -1`` is the
+    test set, and any ``fold >= 0`` subject is a dev subject that acts as
+    validation on run ``fold`` and as training on the other k-1 runs. So no
+    separate ``split`` (dev/test) column is needed — it would be redundant.
+    """
     subjects = subjects.copy()
     labels = subjects["label"].to_numpy()
 
@@ -143,9 +155,7 @@ def assign_split(subjects: pd.DataFrame, test_frac: float, n_folds: int,
     sss = StratifiedShuffleSplit(n_splits=1, test_size=test_frac, random_state=seed)
     dev_idx, test_idx = next(sss.split(subjects, labels))
 
-    subjects["split"] = "dev"
-    subjects.loc[subjects.index[test_idx], "split"] = "test"
-    subjects["fold"] = -1
+    subjects["fold"] = -1  # default = test; overwritten below for dev subjects
 
     # 2. Stratified k folds over the DEV subjects only (subject-level → no leak).
     dev = subjects.iloc[dev_idx].reset_index()  # keep original index in 'index'
@@ -158,15 +168,17 @@ def assign_split(subjects: pd.DataFrame, test_frac: float, n_folds: int,
 
 def verify_no_leakage(subjects: pd.DataFrame, n_folds: int) -> None:
     """Assert every subject sits in exactly one place (test XOR one dev fold)."""
-    test = set(subjects.loc[subjects.split == "test", "subject_id"])
+    test = set(subjects.loc[subjects.fold == -1, "subject_id"])
     fold_sets = [
-        set(subjects.loc[(subjects.split == "dev") & (subjects.fold == f), "subject_id"])
+        set(subjects.loc[subjects.fold == f, "subject_id"])
         for f in range(n_folds)
     ]
-    # No dev subject unassigned.
-    unassigned = subjects[(subjects.split == "dev") & (subjects.fold < 0)]
-    if len(unassigned):
-        raise AssertionError(f"{len(unassigned)} dev subjects got no fold.")
+    # Every subject must land in exactly one bucket: fold in {-1, 0..k-1}.
+    bad = subjects[~subjects.fold.between(-1, n_folds - 1)]
+    if len(bad):
+        raise AssertionError(f"{len(bad)} subjects have an out-of-range fold.")
+    if not test:
+        raise AssertionError("Test set is empty.")
     # Test disjoint from every fold, and folds pairwise disjoint.
     for f, s in enumerate(fold_sets):
         if test & s:
@@ -209,10 +221,10 @@ def print_sanity_table(subjects: pd.DataFrame, slices: pd.DataFrame,
             cells += f"{s:>8} ({i:>6})".rjust(18)
         print(f"{name:<10}{cells}{f'{tot_s} ({tot_i})':>16}")
 
-    row("test", subjects.split == "test")
+    row("test", subjects.fold == -1)
     for f in range(n_folds):
-        row(f"fold {f}", (subjects.split == "dev") & (subjects.fold == f))
-    row("DEV all", subjects.split == "dev")
+        row(f"fold {f}", subjects.fold == f)
+    row("DEV all", subjects.fold >= 0)
     row("TOTAL", subjects.subject_id.notna())
 
     # Majority baseline anchor (research.md §0): predicting no_dementia for all.
@@ -248,16 +260,20 @@ def main(argv=None) -> int:
     subjects = assign_split(subjects, args.test_frac, args.folds, args.seed)
     verify_no_leakage(subjects, args.folds)
 
-    # Join the fold/split assignment back onto the image table.
+    # Join the fold assignment back onto the image table.
     slices = slices.merge(
-        subjects[["subject_id", "split", "fold"]], on="subject_id", how="left"
+        subjects[["subject_id", "fold"]], on="subject_id", how="left"
     )
 
+    # Written columns: label is the 3-class target; class_name is dropped because it
+    # is a 1:1 function of label, and there is no split column (fold carries it).
+    # orig_class is kept — it is NOT derivable from label (traces the pre-merge class).
+    drop_cols = ["class_name", "n_slices"]
     args.out_dir.mkdir(parents=True, exist_ok=True)
     subj_out = args.out_dir / "subject_split_3class.csv"
     slice_out = args.out_dir / "slice_index_3class.csv"
-    subjects.drop(columns=["n_slices"]).to_csv(subj_out, index=False)
-    slices.to_csv(slice_out, index=False)
+    subjects.drop(columns=drop_cols).to_csv(subj_out, index=False)
+    slices.drop(columns=["class_name"]).to_csv(slice_out, index=False)
 
     print_sanity_table(subjects, slices, args.folds)
     print(f"\nWrote:\n  {subj_out}\n  {slice_out}")
