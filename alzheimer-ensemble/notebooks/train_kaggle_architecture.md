@@ -87,20 +87,94 @@ brain tissue. The **middle slices** show the most brain, which is exactly where
 Alzheimer's damage appears.
 
 So `central_lo = 124, central_hi = 136` means: **"keep only the 13 middle slices
-(124 through 136) of each person, throw the rest away."** The code reads the
-slice number straight out of the filename (`..._124.jpg`).
+(124 through 136), throw the rest away."** The code reads the slice number
+straight out of the filename (`..._124.jpg`).
 
-**Why this matters so much for speed:** each person has ~240 slices. Keeping 13
+**Why this matters so much for speed:** each scan has ~240 slices. Keeping 13
 instead of 240 is roughly **18× less data** to process.
+
+### One person is not one scan
+
+A detail that trips up all the arithmetic downstream, so get it straight here.
+Each subject was scanned **more than once**. A filename looks like:
+
+```
+OAS1_0028_MR1_mpr-2_130.jpg
+└──┬───┘ └┬┘ └─┬─┘ └┬┘
+subject  session run  slice number
+```
+
+Most OASIS subjects have **four `mpr` runs** of the same head (some also have an
+`MR2` session), so the same slice number exists four-plus times per person, from
+four repeat scans. Verified across the dataset: the 124–136 window holds
+**18,421 images from 347 subjects — a median of 52 images per person**, not 13.
+
+Two consequences, both important:
+
+1. **Image counts overstate your data.** Four repeat scans of one head are four
+   near-identical pictures. They multiply epoch time without adding a single
+   independent example. Your real sample size is 347 people (§4).
+2. **`(subject_id, slice_idx)` is not a unique key.** It collides on 21,167 of
+   the 86,437 files. That matters for the 2.5D loader below, which is why it keys
+   on the full scan-run prefix (`OAS1_0028_MR1_mpr-2`) instead.
+
+### 2.5D: three slices per channel, not one grayscale copy
+
+MRI scans are gray, but the borrowed model expects a 3-channel colour image. The
+notebook used to copy the same gray slice into all three channels — which means
+two thirds of every input was **redundant**, carrying no information at all.
+
+`slice_25d = True` (the default) fills those three channels with three *adjacent*
+slices instead:
+
+```
+channel R = slice 128   (s - slice_gap)
+channel G = slice 130   (s, the centre slice — this is the row's label)
+channel B = slice 132   (s + slice_gap)
+```
+
+This is called a **2.5D** input: not a full 3D volume, but no longer a single flat
+cross-section either. The model can now see how a structure changes as you move
+through the head, which is real anatomical context — for **zero extra parameters**
+and no change to the model.
+
+`slice_gap = 2` sets the distance between channels. Larger gap = more context per
+image but less local detail.
+
+Two implementation points:
+
+- **Neighbours come from the full scan, not the central window.** `slice_gap = 2`
+  at the window edge (slice 124) needs slice 122, which the 124–136 filter would
+  have thrown away. `add_neighbour_paths()` builds its lookup from the complete
+  file list *before* filtering, so edge slices get real neighbours. Verified: on
+  this dataset **0 of 36,842 neighbour lookups fall back** to the centre slice.
+- **The three channels stay registered.** Augmentation is applied to the *merged*
+  image, so a rotation or crop moves all three slices identically. Augmenting them
+  separately would misalign the anatomy and destroy the point of the whole thing.
+
+Set `slice_25d = False` to get the old grayscale×3 behaviour back — useful as an
+A/B comparison, since that is exactly the change being tested.
 
 ### Why this changed from 5 slices to 13
 
-The notebook originally used `128..132` (5 slices). That was ~48× less data and
-very fast — but it left only about **1,100 training images for an 11-million-
-parameter model**, and the model simply memorized individual people rather than
-learning what dementia looks like. (Section 11 shows the actual log from that
-run.) Widening to 13 slices gives roughly **2.6×** the data for roughly 2.6× the
-epoch time, and it is the single most effective fix.
+The notebook originally used `128..132` (5 slices) — fast, but far too little
+variety for an 11-million-parameter model, and it simply memorized individual
+people rather than learning what dementia looks like. (Section 11 shows the actual
+log from that run.) Widening to 13 slices gives **2.6×** the data for roughly 2.6×
+the epoch time, and it is the single most effective fix.
+
+Measured dev-set image counts (subjects with `fold != -1`), so you can budget:
+
+| Window | Slices | Dev images |
+|---|---:|---:|
+| `128..132` | 5 | 5,635 |
+| `124..136` (default) | 13 | 14,651 |
+| `118..142` | 25 | 28,175 |
+
+An earlier draft of this file quoted "~1,100 images" for the 5-slice window. That
+undercounted by about 5×, because it assumed one scan per person — see "One person
+is not one scan" above. The *ratios* between windows were right; the absolute
+numbers were not.
 
 **When to widen further** (e.g. `118..142` = 25 slices): if the model still
 memorizes. **When to narrow back to `128..132`:** only for a quick smoke test
@@ -147,24 +221,30 @@ Training on fold 0:
 
 ### Your actual numbers
 
-The example above uses 100 people for clean math. The OASIS set here has ~350, so
-in practice:
+The example above uses 100 people for clean math. The OASIS set here has exactly
+347, so in practice:
 
 ```
-~350 people total
-   ├─ ~70 locked away for the final exam (fold = -1)
-   └─ ~280 dev people, cut into 5 folds of ~56
+347 people total
+   ├─  70 locked away for the final exam (fold = -1)
+   └─ 277 dev people, cut into 5 folds of 55-56
 
 Training on fold 0:
-   validation (the "quiz") = fold 0        ≈  56 people
-   training   (the "study")= folds 1,2,3,4 ≈ 224 people
+   validation (the "quiz") = fold 0        =  56 people
+   training   (the "study")= folds 1,2,3,4 = 221 people
 ```
 
-Now bring back the brain slices from Section 3. Each person has 13 slices, so in
-actual *pictures*:
+Now bring back the brain slices from Section 3 — and remember each person has
+~4 repeat scans, so it's 13 slices × ~4 runs ≈ 52 images per person, not 13. The
+measured counts for fold 0:
 
-- Study set ≈ 224 people × 13 = **~2,900 images**
-- Quiz set  ≈  56 people × 13 = **~730 images**
+- Study set = 221 people = **11,791 images**
+- Quiz set  =  56 people = **2,860 images**
+- (dev total = 277 people = 14,651 images; 70 people locked away in `fold == -1`)
+
+**Do not read those image counts as sample size.** 11,791 pictures come from 221
+people, and four of them are repeat scans of the same head at the same slice. The
+number that limits what this model can learn is **221**.
 
 ### A warning about how small the quiz really is
 
@@ -202,10 +282,15 @@ flowchart TD
     A["Raw MRI files<br/>/kaggle/input/.../Data"] --> B["scan()<br/>read filenames into a table"]
     B --> C["assign_folds()<br/>split by PERSON into groups"]
     C --> D["keep central brain slices<br/>(124..136)"]
-    D --> E["drop_unreadable()<br/>toss corrupt images"]
+    D --> D2["add_neighbour_paths()<br/>attach f_lo / f_hi for 2.5D"]
+    D2 --> E["drop_unreadable()<br/>toss corrupt images"]
     E --> F{"cache to<br/>parquet?"}
     F -->|"saved"| G["central table<br/>(the clean list)"]
     F -->|"reload next time"| G
+
+    G --> PA["5b: cached_features()<br/>frozen backbone, once"]
+    PA --> PB["train_probe(fold)<br/>head only, on cached vectors"]
+    PB --> R
 
     G --> H["train_fold(fold)"]
     H --> I["DataLoader<br/>augments + feeds batches"]
@@ -231,6 +316,12 @@ flowchart TD
 The box "two-stage teaching" is where the GPU time (and your Kaggle quota) goes.
 The `cache` diamond is the trick that lets you skip the slow file-scan on reruns.
 
+Notice the **two independent paths** out of the clean table. The left one (5b) is
+the cheap linear probe on cached features; the right one is the expensive
+two-stage fine-tune. They share the same split, the same augmentation, and the
+same subject-level grading, so their scores are directly comparable — which is the
+whole point of having both (§9b).
+
 Note the `grade stage 1` box — it's what makes the saved checkpoint safe, and
 Section 7 explains it.
 
@@ -240,10 +331,11 @@ The labels in the diagram map onto the notebook's numbered sections like this:
 |---|---|
 | 0. GPU sanity check | (before everything) |
 | 1. Config | supplies every setting below |
-| 2. Rebuild the split | `scan` → `assign_folds` → central slices → `drop_unreadable` → cache |
+| 2. Rebuild the split | `scan` → `assign_folds` → central slices → `add_neighbour_paths` → `drop_unreadable` → cache |
 | 3. Dataset + transforms | `DataLoader` / augmentation |
 | 4. Model factory | `build_model`, `set_trainable`, `freeze_frozen_bn`, `param_groups` |
 | 5. Train / eval helpers | `run_epoch`, `subject_eval` |
+| 5b. Cached-feature probe | `cached_features`, `train_probe`, `aggregate_subject` |
 | 6. Two-stage training | the whole `TRAIN` subgraph |
 | 7. Results | the report card |
 | 8. Persist outputs | `persist_outputs` |
@@ -272,7 +364,7 @@ flowchart LR
 - One **epoch** = one full pass over *all* the study images.
 
 **"Do we train on the same images every epoch?"** Yes. Within one run, those same
-~2,900 study images are shown again and again — once per epoch. If
+11,791 study images are shown again and again — once per epoch. If
 `stage2_epochs = 12`, the model may see each image up to 12 times. Each time,
 **augmentation** makes it look different, so the model can't just memorize exact
 pixels.
@@ -291,6 +383,12 @@ too gentle (a 10° rotation and a flip), which is *why* memorizing was easy. Now
 | `RandomAffine(12°, translate 6%)` | small rotate + shift | breaks "the damage is always at pixel (100,80)" memorization |
 | `ColorJitter(brightness 0.2, contrast 0.2)` | changes exposure | different scanners produce different brightness |
 | `RandomErasing(p=0.25, scale 0.02–0.12)` | blanks out a small random patch, 1 time in 4 | forces the model to use more than one region of the brain |
+
+With `slice_25d = True` every one of these acts on the **merged three-slice
+image**, so all three channels get the identical crop, flip, and shift and stay
+anatomically registered (§3). `RandomErasing` blanks the same patch in all three —
+which is what you want: it removes a *region of the head*, not one slice's copy
+of it.
 
 Validation and test images get **none** of this — they're resized, converted to
 numbers, normalized, and nothing else (`build_tf(train=False)`). You grade on
@@ -342,8 +440,8 @@ that does the freezing.
 
 ### What changed: stage 2 no longer unfreezes everything
 
-Stage 2 used to unlock the *whole* model. On ~1,100 images that was hopeless —
-11 million adjustable numbers against 1,100 examples is an invitation to
+Stage 2 used to unlock the *whole* model. On the 5-slice window that was hopeless
+— 11 million adjustable numbers against 221 people (§4) is an invitation to
 memorize. Now `CFG["freeze_until"]` controls how much gets unlocked.
 
 ### Where ResNet-18's 11 million numbers actually live
@@ -384,7 +482,14 @@ stores that as the current best. Stage 2 can only *replace* it by scoring
 **strictly higher** on validation macro-F1. If fine-tuning is hopeless at this
 data size, you automatically keep the stage-1 model instead of the least-bad
 stage-2 epoch. This is a safety net: your saved checkpoint can never be worse
-than the linear probe.
+than the stage-1 head.
+
+**But `stage1_epochs = 3` is not a converged linear probe.** Three passes with one
+grading at the end is a rough sketch of the head, not its best achievable score,
+so "stage 2 failed to beat stage 1" is a weaker statement than it sounds. Section
+5b of the notebook exists to give you the *real* linear-probe number — 30 epochs
+with per-epoch validation and early stopping — cheaply enough to run on all five
+folds. Compare stage 2 against **that**, not against the 3-epoch sketch (§9b).
 
 ---
 
@@ -409,6 +514,8 @@ touch it**.
 | Setting | Now | Plain meaning | Check before changing |
 |---|---|---|---|
 | `central_lo`, `central_hi` | `124`, `136` | which brain slices to keep (Section 3) | Widen to `118..142` if still memorizing; narrow to `128..132` only for smoke tests. **Changing this rebuilds the cache automatically** — the cache filename contains the window. |
+| `slice_25d` | `True` | stack three adjacent slices as the RGB channels instead of copying one gray slice (Section 3) | `False` restores the old behaviour. Changing it changes the cache filename, so both versions can coexist. |
+| `slice_gap` | `2` | how many slices apart the three channels are | Larger = more context, less local detail. `4` is worth an A/B; `1` is nearly the old behaviour, since adjacent slices barely differ. |
 | `img_size` | `224` | pixel size each image is resized to | The borrowed model expects 224. Leave it unless you know why. |
 | `batch_size` | `32` | images processed together | If you get "out of memory," **lower** this (16, or 8). |
 
@@ -428,6 +535,18 @@ touch it**.
 | `dropout` | `0.5` | randomly ignores half the head's inputs each step | Raise to `0.6` if still memorizing. |
 | `patience` | `4` | no-improvement rounds allowed before stopping | Lower = saves time; higher = more thorough. |
 | `num_workers` | `2` | background helpers that load images | 2 is safe on Kaggle. Raising it sometimes crashes. |
+
+### Cached-feature probe settings (section 5b)
+
+| Setting | Now | Plain meaning | Check before changing |
+|---|---|---|---|
+| `probe_views` | `4` | how many *augmented* copies of each image get their features extracted and cached | More views = more augmentation variety for the head, and proportionally more extraction time and cache size. `0` = deterministic features only. |
+| `probe_epochs` | `30` | rounds of training the head on cached features | Cheap — each epoch is a few seconds. Raise it before you suspect the probe is undertrained. |
+| `probe_lr` | `1e-3` | learning speed for the probe head | Same role as `lr_head`. The probe is the cheapest place to sweep this. |
+| `probe_patience` | `8` | no-improvement rounds before the probe stops | Higher than `patience = 4` because probe epochs cost almost nothing. |
+
+The probe reuses `dropout`, `weight_decay`, `label_smoothing`, `use_sampler`, and
+`seed` from the main config, so a probe result transfers meaningfully to stage 1.
 
 **The `freeze_until` / `backbone` coupling.** `freeze_until` names a block, and
 the block names differ per architecture. The notebook's `BLOCK_ORDER` map says:
@@ -512,9 +631,18 @@ don't exist on Kaggle. `assign_folds()` recreates the exact same groups because
 labels, and folds `Moderate Dementia` into `Mild Dementia` (label 2) — there are
 too few Moderate subjects to be a class of their own.
 
-**Grayscale → 3 colors.** MRI scans are gray, but the borrowed model expects color
-(3 channels). We copy the gray shade into all three channels. It adds no
-information — it just matches the expected format.
+**Grayscale → 3 channels, now carrying real information.** MRI scans are gray but
+the borrowed model expects 3 channels. The old code copied one gray slice into all
+three (format-matching, zero information). With `slice_25d = True` the channels
+hold three adjacent slices instead — see §3.
+
+**Neighbour lookup keys on the scan run, not the subject.** `series_id()` strips
+the trailing `_<slice>.jpg` to get `OAS1_0028_MR1_mpr-2`. This is not a
+micro-optimization: `(subject_id, slice_idx)` collides on 21,167 of the 86,437
+files, because each subject has ~4 mpr runs (§3). Keying on it would have paired
+each slice with a "neighbour" from a *different, unregistered scan* — silently
+producing three misaligned channels, which is worse than the redundant copies it
+replaced.
 
 **Two layers of defense against corrupt files.** `drop_unreadable()` opens and
 fully loads every central-slice image *once*, before training, and drops the ones
@@ -533,8 +661,8 @@ layer4 + head at two different speeds. That's why the code builds a fresh
 **Frozen BatchNorm.** This one is subtle but real. **BatchNorm** layers keep a
 running average of how bright/contrasty the images they've seen are. Even when a
 block is frozen, PyTorch's `model.train()` keeps *updating those averages*. On a
-tiny dataset that quietly drags the borrowed ImageNet statistics toward your 2,900
-images — a hidden form of memorizing. `freeze_frozen_bn()` puts frozen BatchNorm
+tiny dataset that quietly drags the borrowed ImageNet statistics toward your 221
+training subjects — a hidden form of memorizing. `freeze_frozen_bn()` puts frozen BatchNorm
 layers into eval mode at the start of each training epoch so their averages stay
 pinned.
 
@@ -564,6 +692,103 @@ number to beat is **0.767**, the accuracy you get by lazily predicting
 **Checkpoints are dictionaries.** `model_fold{k}.pt` holds the weights *plus* the
 config, fold number, best score, which epoch won, and the class names — so a
 downloaded file explains itself. Reload code is in the runbook.
+
+---
+
+## 9b. The cached-feature probe (notebook section 5b)
+
+### The idea
+
+During stage 1 the backbone is **frozen**. A frozen backbone is a fixed function:
+feed it the same image twice and you get the identical 512-number feature vector.
+Yet the normal training loop pushes every image through all 11 million parameters
+again on every single epoch — computing the same answer 30 times.
+
+The probe removes that waste:
+
+```
+ONCE:      every image ──► frozen ResNet18 ──► 512 numbers ──► saved to disk
+EACH RUN:  512 numbers ──► Dropout + Linear ──► 3 scores
+```
+
+Only the second line repeats. It's 1,539 parameters over a table of cached
+vectors, so **a 30-epoch, 5-fold probe takes seconds** where the equivalent
+through the full network takes many minutes. That speed is the entire point: it
+turns "I wonder if `weight_decay = 3e-2` helps" from a coffee break into an
+instant answer, and it makes running all five folds free.
+
+### What it does NOT do
+
+The probe cannot tell you anything about **fine-tuning**. The moment `layer4`
+becomes trainable the features change every epoch, and cached vectors are
+worthless. Section 5b is a fast, honest *linear-probe* baseline and a sweeping
+tool — not a replacement for section 6.
+
+### Three details that keep it honest
+
+**1. Augmentation is extracted up front.** A cached vector can't be re-augmented,
+so a probe on deterministic features alone would train with no augmentation at all
+and overstate overfitting. Instead `cached_features()` runs the backbone
+`1 + probe_views` times: one deterministic pass, plus `probe_views = 4` passes
+through the full training augmentation, each with its own seed
+(`CFG["seed"] + v`). Training uses all five; **validation uses the deterministic
+view only**, so the quiz stays clean and repeatable.
+
+**2. Standardisation is fit on training rows only.** Before the head sees them,
+features are rescaled to zero mean and unit variance. `mu` and `sd` are computed
+from that fold's *training* rows and then applied to validation — computing them
+over everything would leak validation statistics into training. Same discipline as
+the split itself.
+
+**3. The test set is never extracted.** `cached_features()` filters to
+`fold != -1` before doing anything.
+
+### The cache file
+
+Features land in `/kaggle/working/feats_<tag>.pt`, where the tag encodes
+everything that can change a feature vector:
+
+```
+feats_resnet18_124-136_g2_s224_v4_seed42.pt
+      └───┬──┘ └──┬───┘ └┬┘ └─┬┘ └┬┘ └──┬─┘
+   backbone   window   gap  size views  seed
+```
+
+Change the backbone, the slice window, `slice_gap`, `img_size`, `probe_views`, or
+`seed`, and the filename changes, so a stale cache can never be silently reused.
+Nothing else invalidates it — and nothing else needs to, since `dropout`,
+`weight_decay`, `probe_lr` and friends only affect the head, which is exactly why
+sweeping them is free.
+
+Expect **~150 MB** for the default resnet18 setup (14,651 dev images × 5 views ×
+512 floats). A resnet50 cache is 4× larger, because its features are 2048-d. The
+runbook covers what that means for `outputs.zip`.
+
+### Reading the probe output
+
+The shape of the output (the numbers here are **made up** to show the format, not
+a result from this dataset):
+
+```
+=== probe fold 0 (2,860 val images) ===
+    [p  1] train_loss=1.0512  val_loss=1.0384  val_macroF1=0.3120  val_balAcc=0.3400
+    [p  5] train_loss=0.8801  val_loss=0.9655  val_macroF1=0.4015  val_balAcc=0.4210
+    ...
+  best val_macroF1=0.4380 @ epoch 17
+
+PROBE macro-F1 : 0.4380 +/- 0.0000  over folds [0]
+PROBE bal-acc  : 0.4510 +/- 0.0000
+baseline       : majority-class macro-F1 = 0.286 / bal-acc = 0.333 (chance)
+```
+
+Read it exactly like the stage-2 log (§10): `val_loss` rising while `train_loss`
+falls means the *head* is overfitting, which at 1,539 parameters means raise
+`dropout` or `weight_decay`. The `+/- 0.0000` is not stability — it's the standard
+deviation of a single number, and the notebook prints a warning saying so whenever
+you run fewer than five folds.
+
+Set `results = probe_results` to reuse section 7's per-class report and confusion
+matrices on the probe.
 
 ---
 
@@ -611,34 +836,45 @@ This section exists because of a real run. Here's what it printed:
 Read it like this: **train loss fell 3× while the validation score fell every
 single epoch.** That is the textbook signature of **overfitting** — the model
 isn't learning what Alzheimer's looks like, it's learning what *these specific
-224 people* look like. Final accuracy was 0.68, *below* the 0.767 you'd get by
+221 people* look like. Final accuracy was 0.68, *below* the 0.767 you'd get by
 lazily guessing "no_dementia" for everyone.
 
-The cause was arithmetic: **11 million adjustable numbers, ~1,100 training
-images, and augmentation too weak to hide the repeats.**
+The cause was arithmetic: **11 million adjustable numbers against 221 people**,
+with augmentation too weak to hide the repeats. Note the unit — *people*. The
+5-slice window did supply 5,635 dev images, but roughly four of every five were a
+repeat scan or a neighbouring slice of a head the model had already seen.
 
-### The seven fixes now in the notebook
+### The fixes now in the notebook
 
 | # | Fix | Where | Explained in |
 |---|---|---|---|
-| 1 | **More data** — 5 → 13 brain slices per person (~2.6× images) | `central_lo/hi` | §3 |
+| 1 | **More data** — 5 → 13 brain slices per scan (2.6× images) | `central_lo/hi` | §3 |
 | 2 | **Freeze most of the body** — stage 2 trains 75% instead of 100% | `freeze_until` | §7 |
 | 3 | **Pin BatchNorm statistics** in frozen blocks | `freeze_frozen_bn()` | §9 |
 | 4 | **Real augmentation** — crop, affine, erasing | `build_tf()` | §6 |
 | 5 | **100× more weight decay** (`1e-4` → `1e-2`), plus dropout 0.5 and label smoothing 0.05 | `CFG` | §8 |
 | 6 | **Discriminative learning rates + cosine decay** | stage 2 optimizer | §8 |
 | 7 | **Stage 1 is the floor** — stage 2 must beat it or be discarded | `train_fold()` | §7 |
+| 8 | **2.5D input** — three real slices per image instead of one copied three times: more signal per input, no extra parameters | `slice_25d` | §3 |
+| 9 | **A converged linear-probe baseline** — cheap enough to run on 5 folds, so "did this help?" stops being guesswork | section 5b | §9b |
+
+Fixes 8 and 9 are different in kind from 1–7. The first seven *restrain* the
+model; 8 gives it better input, and 9 gives **you** a measurement good enough to
+tell whether any of it worked.
 
 ### If it still overfits — tighten in this order
 
 Roughly most → least effective:
 
+0. **Sweep it on the probe first** (§9b) — dropout, weight decay and the slice
+   window can all be tested in seconds on all five folds. Only spend GPU minutes
+   on settings the probe says are worth it.
 1. `central_lo=118, central_hi=142` — more real data beats every other fix
 2. **augmentation** — already aggressive; the next step up is **mixup** (blending
    two images and their labels), which is not in the notebook yet. Add it before
    you start loosening anything else.
-3. `freeze_until = "head"` — a linear probe on ~3k images is genuinely
-   competitive at this size, not a cop-out
+3. `freeze_until = "head"` — a linear probe is genuinely competitive at this
+   sample size, not a cop-out
 4. `weight_decay = 3e-2`
 5. `lr_backbone = 1e-5`
 6. `dropout = 0.6`
@@ -655,7 +891,17 @@ If instead **train loss stays high and val F1 plateaus low**, you've over-correc
 ## 12. Next steps once the recipe works
 
 - Set `run_folds = [0,1,2,3,4]` for full cross-validation and report **mean ± std**
-  (Section 7 of the notebook prints exactly this).
+  (Section 7 of the notebook prints exactly this). With section 5b this is now
+  cheap for the probe, so there is no excuse for judging a probe change on one
+  fold.
+- **A/B the 2.5D input.** Run the probe with `slice_25d = True` and again with
+  `False` — two cache files, both kept, a few minutes total. That is the cleanest
+  measurement of whether real slice context helps here.
+- **Sweep `slice_gap`** (2 vs 4) the same way.
+- **Consider the repeat scans.** Every subject contributes ~4 mpr runs of the same
+  head (§3), so image counts — and therefore the sampler's class balancing —
+  overstate your data by roughly 4×. Restricting to `mpr-1`, or averaging the runs
+  at evaluation time, is worth testing once the probe baseline is stable.
 - **Only evaluate the test set (`fold == -1`) once**, after the recipe is frozen.
   Every peek at it costs you the right to call the number honest.
 - Try `backbone = "resnet50"` as a second model and compare macro-F1.
