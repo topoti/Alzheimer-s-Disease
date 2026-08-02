@@ -541,6 +541,28 @@ def run_epoch_diag(model, loader, crit, opt, scaler, bn_eval_all):
         tot += loss.item() * x.size(0)
     return tot / len(loader.dataset)
 
+def probe_head_state(Fd, fold, nc=3):
+    """Fit the cached-feature linear probe on `fold`, then fold its input standardiser
+    into the weights so the result drops straight into build_model's raw-feature head.
+
+        probe:  W @ ((x - mu) / sd) + b   ==   (W / sd) @ x + (b - (W / sd) @ mu)
+
+    Dropout is inverted, so its train-time scaling is identical in both and needs no
+    correction. Fd must come from the same backbone as CFG['backbone'], otherwise the
+    weight copy raises on shape mismatch.
+    """
+    trX, trY, vaX, vaY, vaS, _, _ = fold_tensors(Fd, fold)
+    r = fit_probe(trX, trY, vaX, vaY, vaS, nc=nc)
+    W, b = r["state"]["1.weight"], r["state"]["1.bias"]
+    Wf = W / r["sd"].squeeze(0)
+    return dict(weight=Wf, bias=b - Wf @ r["mu"].squeeze(0)), r
+
+def load_head(model, backbone, hs):
+    lin = getattr(model, HEAD_ATTR[backbone])[1]
+    with torch.no_grad():
+        lin.weight.copy_(hs["weight"].to(lin.weight.device))
+        lin.bias.copy_(hs["bias"].to(lin.bias.device))
+
 def b_finetune():
     banner(f"10. FINE-TUNE DIAGNOSTICS (fold {FT_FOLD} only, 4 variants)")
     tr = central[(central.fold != FT_FOLD) & (central.fold != -1)]
@@ -549,6 +571,9 @@ def b_finetune():
           f"val {va.subject_id.nunique()} subj / {len(va):,} img")
     va_dl = DataLoader(OasisDS(va, False), CFG["batch_size"], shuffle=False,
                        num_workers=CFG["num_workers"], pin_memory=True)
+    HS, pr = probe_head_state(F, FT_FOLD)
+    print(f"warm-start head <- cached probe on fold {FT_FOLD}: best@ep{pr['best_epoch']} "
+          f"subj {fmt(pr['best']['subj'])}")
     VARIANTS = [
         dict(tag="A_baseline_repro", bn_eval_all=False, sampler=True,  lr_bb=CFG["lr_backbone"]),
         dict(tag="B_allBN_eval",     bn_eval_all=True,  sampler=True,  lr_bb=CFG["lr_backbone"]),
@@ -570,9 +595,13 @@ def b_finetune():
             dl = DataLoader(ds, CFG["batch_size"], shuffle=True,
                             num_workers=CFG["num_workers"], pin_memory=True, drop_last=True)
         model = build_model(CFG["backbone"]).to(device)
+        load_head(model, CFG["backbone"], HS)
         crit = nn.CrossEntropyLoss(label_smoothing=CFG["label_smoothing"],
                                    weight=None if V["sampler"] else class_weights(tr))
         scaler = torch.amp.GradScaler("cuda", enabled=AMP)
+        mw = eval_loader(model, va_dl, crit)
+        print(f"  [warm] val_loss={mw['loss']:.4f} img F1={mw['img']['macro_f1']:.4f} | "
+              f"subj {fmt(mw['subj'])}")
 
         set_trainable(model, CFG["backbone"], "head")
         opt = torch.optim.AdamW(param_groups(model, CFG["backbone"], V["lr_bb"],
@@ -614,9 +643,11 @@ def b_finetune():
         model.load_state_dict(best_state)
         rr = eval_loader(model, va_dl, crit)
         rb = eval_loader(model, va_dl, crit, batchstats=True)
+        dF1 = rb["subj"]["macro_f1"] - rr["subj"]["macro_f1"]
         print(f"  BEST weights, RUNNING BN stats : {fmt(rr['subj'])}")
-        print(f"  BEST weights, BATCH   BN stats : {fmt(rb['subj'])}"
-              f"   <-- much higher => BN running stats ARE the problem")
+        print(f"  BEST weights, BATCH   BN stats : {fmt(rb['subj'])}")
+        print(f"  batch - running subjF1 = {dF1:+.4f} => BN running stats "
+              f"{'ARE' if dF1 > 0.02 else 'are NOT'} the problem")
         print(f"  subject confusion (running stats):\n{np.array2string(rr['subj']['cm'])}")
         print(classification_report(rr["subj"]["true"], rr["subj"]["pred"],
                                     target_names=CLASS_NAMES, labels=[0, 1, 2],
