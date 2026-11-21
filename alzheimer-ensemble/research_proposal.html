@@ -1,0 +1,734 @@
+<title>Leakage-Safe Alzheimer Staging</title>
+<style>
+  :root {
+    --paper:      #f8fafa;
+    --surface:    #ffffff;
+    --surface-2:  #f1f6f6;
+    --ink:        #111a1b;
+    --ink-2:      #3b4a4c;
+    --ink-3:      #6a7a7c;
+    --rule:       #d9e4e4;
+    --rule-soft:  #e9f0f0;
+    --accent:     #0d6269;
+    --accent-2:   #0a4f55;
+    --accent-soft:#e2eeee;
+    --risk:       #9c3a2e;
+    --risk-soft:  #f8ebe8;
+    --good:       #2c6248;
+    --good-soft:  #e8f1ec;
+    --warn:       #875713;
+    --warn-soft:  #f7eedd;
+
+    --serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+
+    --measure: 68ch;
+    --gutter: 10rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0c1213;
+      --surface:    #111a1b;
+      --surface-2:  #162122;
+      --ink:        #e7eeed;
+      --ink-2:      #b0bfbf;
+      --ink-3:      #7c8d8d;
+      --rule:       #223030;
+      --rule-soft:  #1a2626;
+      --accent:     #52b4b9;
+      --accent-2:   #7ccbcf;
+      --accent-soft:#102a2c;
+      --risk:       #e28d7f;
+      --risk-soft:  #2a1a17;
+      --good:       #7fc1a1;
+      --good-soft:  #15251f;
+      --warn:       #d9a955;
+      --warn-soft:  #271f11;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0c1213;
+    --surface:    #111a1b;
+    --surface-2:  #162122;
+    --ink:        #e7eeed;
+    --ink-2:      #b0bfbf;
+    --ink-3:      #7c8d8d;
+    --rule:       #223030;
+    --rule-soft:  #1a2626;
+    --accent:     #52b4b9;
+    --accent-2:   #7ccbcf;
+    --accent-soft:#102a2c;
+    --risk:       #e28d7f;
+    --risk-soft:  #2a1a17;
+    --good:       #7fc1a1;
+    --good-soft:  #15251f;
+    --warn:       #d9a955;
+    --warn-soft:  #271f11;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 1.5rem 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .doc {
+    max-width: calc(var(--measure) + var(--gutter) + 3rem);
+    margin: 0 auto;
+  }
+
+  /* ---- masthead ---- */
+
+  .masthead {
+    padding: 4rem 0 2rem;
+    border-bottom: 2px solid var(--ink);
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  h1 {
+    font-size: clamp(2rem, 5vw, 2.9rem);
+    line-height: 1.12;
+    font-weight: 400;
+    margin: 0;
+    text-wrap: balance;
+    letter-spacing: -0.015em;
+  }
+
+  .standfirst {
+    font-size: 1.15rem;
+    color: var(--ink-2);
+    max-width: var(--measure);
+    margin: 0;
+    text-wrap: pretty;
+  }
+
+  .byline {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--rule);
+  }
+  .byline b { color: var(--ink-2); font-weight: 400; }
+
+  /* ---- sections with numbered gutter ---- */
+
+  section {
+    display: grid;
+    grid-template-columns: var(--gutter) minmax(0, 1fr);
+    gap: 0 3rem;
+    padding: 3.25rem 0 0;
+    align-items: start;
+  }
+
+  .gut {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--ink-3);
+    text-align: right;
+    position: sticky;
+    top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    align-items: flex-end;
+  }
+  .gut .num {
+    color: var(--accent);
+    letter-spacing: 0.1em;
+  }
+  .gut .note {
+    font-style: normal;
+    color: var(--ink-3);
+    max-width: 9rem;
+    text-align: right;
+    text-wrap: pretty;
+  }
+
+  .body { max-width: var(--measure); min-width: 0; }
+
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 400;
+    line-height: 1.25;
+    margin: 0 0 1rem;
+    text-wrap: balance;
+    letter-spacing: -0.01em;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    font-weight: 600;
+    margin: 2rem 0 0.75rem;
+  }
+
+  p { margin: 0 0 1rem; text-wrap: pretty; }
+  .body > p:last-child { margin-bottom: 0; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  strong { font-weight: 700; }
+  em.term { font-style: normal; font-weight: 700; }
+
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--surface-2);
+    padding: 0.1em 0.35em;
+    border: 1px solid var(--rule-soft);
+  }
+
+  ul, ol { margin: 0 0 1rem; padding-left: 1.3rem; }
+  li { margin-bottom: 0.5rem; }
+  li::marker { color: var(--ink-3); }
+
+  /* ---- callouts: square, hairline, severity-coded ---- */
+
+  .call {
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--ink-3);
+    background: var(--surface);
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+  }
+  .call .label {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 0.5rem;
+    color: var(--ink-3);
+  }
+  .call p:last-child { margin-bottom: 0; }
+
+  .call.risk { border-left-color: var(--risk); background: var(--risk-soft); }
+  .call.risk .label { color: var(--risk); }
+  .call.good { border-left-color: var(--good); background: var(--good-soft); }
+  .call.good .label { color: var(--good); }
+  .call.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+  .call.warn .label { color: var(--warn); }
+  .call.key  { border-left-color: var(--accent); background: var(--accent-soft); }
+  .call.key .label { color: var(--accent); }
+
+  /* ---- tables ---- */
+
+  .tw {
+    overflow-x: auto;
+    margin: 1.5rem 0;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.86rem;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    caption-side: top;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 0.75rem 1rem 0.5rem;
+  }
+  th, td {
+    padding: 0.5rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  thead th {
+    border-bottom: 1px solid var(--rule);
+    color: var(--ink-2);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.n, th.n { text-align: right; }
+  tr.tot td { border-top: 1px solid var(--rule); font-weight: 700; }
+  .ok   { color: var(--good); }
+  .bad  { color: var(--risk); }
+  .dim  { color: var(--ink-3); }
+
+  /* ---- step list: genuine sequence ---- */
+
+  ol.steps {
+    list-style: none;
+    padding: 0;
+    margin: 1.5rem 0;
+    counter-reset: s;
+    display: flex;
+    flex-direction: column;
+  }
+  ol.steps > li {
+    counter-increment: s;
+    display: grid;
+    grid-template-columns: 2.2rem 1fr;
+    gap: 0 1rem;
+    padding: 0.85rem 0;
+    border-top: 1px solid var(--rule-soft);
+    margin: 0;
+  }
+  ol.steps > li:last-child { border-bottom: 1px solid var(--rule-soft); }
+  ol.steps > li::before {
+    content: counter(s, decimal-leading-zero);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    padding-top: 0.25rem;
+  }
+  ol.steps .st { font-weight: 700; display: block; }
+  ol.steps .sd { color: var(--ink-2); font-size: 0.95rem; }
+
+  /* ---- ladder ---- */
+
+  .ladder { display: flex; flex-direction: column; margin: 1.5rem 0; }
+  .rung {
+    border: 1px solid var(--rule);
+    border-bottom: none;
+    background: var(--surface);
+    padding: 0.9rem 1.15rem;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: 0.35rem 1rem;
+    align-items: baseline;
+  }
+  .rung:last-child { border-bottom: 1px solid var(--rule); }
+  .rung .nm { font-weight: 700; }
+  .rung .tag {
+    font-family: var(--mono);
+    font-size: 0.67rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    white-space: nowrap;
+  }
+  .rung .why { grid-column: 1 / -1; font-size: 0.95rem; color: var(--ink-2); }
+
+  /* ---- status chips ---- */
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.15em 0.5em;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .chip.done { color: var(--good); }
+  .chip.wip  { color: var(--warn); }
+  .chip.todo { color: var(--ink-3); }
+
+  hr.sep {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 3.5rem 0 0;
+  }
+
+  footer {
+    margin-top: 3.5rem;
+    padding-top: 1.5rem;
+    border-top: 2px solid var(--ink);
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-3);
+    line-height: 1.7;
+  }
+  footer a { color: var(--accent); }
+  footer ol { padding-left: 1.3rem; }
+
+  @media (max-width: 780px) {
+    body { font-size: 16px; padding: 0 1.1rem 4rem; }
+    section { grid-template-columns: 1fr; gap: 0; padding-top: 2.5rem; }
+    .gut {
+      position: static;
+      flex-direction: row;
+      align-items: baseline;
+      text-align: left;
+      gap: 0.75rem;
+      margin-bottom: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .gut .note { text-align: left; max-width: none; }
+    .rung { grid-template-columns: 1fr; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="doc">
+
+  <header class="masthead">
+    <span class="eyebrow">Research proposal · MRI / Alzheimer staging</span>
+    <h1>Staging Alzheimer's disease from brain MRI, measured per patient</h1>
+    <p class="standfirst">A deep transfer learning study on OASIS structural MRI, designed so that every reported number describes performance on a patient the model has never seen. The experimental protocol <em class="term">is</em> the contribution.</p>
+    <div class="byline">
+      <span><b>Dataset:</b> OASIS-1, 347 subjects</span>
+      <span><b>Task:</b> 3-class staging</span>
+      <span><b>Compute:</b> Kaggle free T4</span>
+      <span><b>Status:</b> pipeline built, results pending</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="gut"><span class="num">§ 00</span><span class="note">the one-paragraph version</span></div>
+    <div class="body">
+      <h2>What I propose to build</h2>
+      <p>I am building a classifier that reads a structural brain MRI and assigns it to one of three stages: <strong>no dementia</strong>, <strong>very mild dementia</strong>, or <strong>mild-or-worse dementia</strong>. The approach is transfer learning — take a convolutional network already trained to see on millions of ordinary photographs, and retrain its decision layer for this medical task, because 347 patients is nowhere near enough data to teach a network to see from scratch.</p>
+      <p>The modelling is standard and I expect it to work. The part of this project that requires real care, and where I am asking for your agreement before I commit GPU time, is the <strong>experimental protocol</strong>: how the data is partitioned, what unit performance is measured on, and which number gets reported as the result.</p>
+      <div class="call key">
+        <span class="label">The proposition</span>
+        <p>Build a stage classifier whose headline metric is computed <strong>per patient, on patients held out entirely from training</strong>, benchmarked against the score a model achieves by learning nothing at all. I expect a modest number. I would rather defend a modest number that holds than report a large one that does not.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 01</span><span class="note">the clinical problem</span></div>
+    <div class="body">
+      <h2>Why staging, and why MRI</h2>
+      <p>Alzheimer's disease progresses gradually, and the window in which intervention is most useful falls early — before substantial cognitive decline is apparent. Structural MRI records the physical correlates of that progression: cortical thinning, hippocampal and medial temporal atrophy, and enlargement of the ventricles as surrounding tissue is lost.</p>
+      <p>These changes are visible, but in the early stages they are subtle and their assessment is time-consuming and subject to inter-rater variability. That makes the problem a reasonable candidate for automation: a model that flags likely early-stage cases for closer human review is useful even when it is not independently reliable.</p>
+      <p>The scientifically interesting and clinically important boundary is not <em>healthy vs. advanced dementia</em> — that distinction is comparatively easy and comparatively useless, because by then the diagnosis is not in doubt. It is the boundary between <strong>healthy and very mild</strong>. My evaluation is therefore designed to make that specific confusion visible rather than averaging it away.</p>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 02</span><span class="note">the data, counted honestly</span></div>
+    <div class="body">
+      <h2>What the dataset actually contains</h2>
+      <p>The corpus is OASIS-1 cross-sectional MRI. Each brain volume was sliced along the z-axis and slices 100–160 retained as images. This produces a file count that is badly misleading about how much data there really is.</p>
+
+      <div class="tw">
+        <table>
+          <caption>Table 1 — Images overstate sample size by roughly 250×</caption>
+          <thead>
+            <tr><th>Class</th><th class="n">Images</th><th class="n">Patients</th><th>Proposed label</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Non Demented</td><td class="n">67,222</td><td class="n">266</td><td>0 · no_dementia</td></tr>
+            <tr><td>Very mild Dementia</td><td class="n">13,725</td><td class="n">58</td><td>1 · very_mild</td></tr>
+            <tr><td>Mild Dementia</td><td class="n">5,002</td><td class="n">21</td><td>2 · mild_moderate</td></tr>
+            <tr><td>Moderate Dementia</td><td class="n">488</td><td class="n bad">2</td><td>2 · mild_moderate <span class="dim">(merged)</span></td></tr>
+            <tr class="tot"><td>Total</td><td class="n">86,437</td><td class="n">347</td><td>3 classes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="call risk">
+        <span class="label">The number that governs this project</span>
+        <p>86,437 images sounds like a large dataset. It is not. It is <strong>347 people</strong>. Every patient was scanned about four times and each scan sliced ~61 ways, so one person contributes roughly 240 near-identical pictures of the same skull. Those 240 images are one sample, not 240. Everything in this proposal follows from taking that seriously.</p>
+      </div>
+
+      <h3>Structure verified directly against the files</h3>
+      <p>The filename encodes the grouping key: <code>OAS1_0351_MR1_mpr-4_160.jpg</code> gives patient <code>OAS1_0351</code>, session <code>MR1</code>, acquisition <code>mpr-4</code>, slice <code>160</code>. I checked three things before designing anything:</p>
+      <ul>
+        <li><strong>No patient appears in more than one class.</strong> OASIS-1 assigns a single clinical dementia rating per subject, so a patient belongs to exactly one stage. Cross-class contamination is ruled out.</li>
+        <li><strong>Slice coverage is uniform</strong> — exactly 1,417 images at each of the 61 slice indices.</li>
+        <li><strong>Repeat scans are the norm.</strong> Patients carry ~4 <code>mpr</code> acquisitions of the same head, so <code>(patient, slice)</code> is not a unique key — it collides on 21,167 of the 86,437 files. Any code that assumes one scan per person will silently miscount.</li>
+      </ul>
+
+      <h3>Why three classes and not four</h3>
+      <p>The source data separates Mild from Moderate dementia. Moderate contains <strong>two patients</strong>. Two people cannot be meaningfully present in both a training and a testing partition, and any accuracy figure reported for that class would describe those two individuals rather than the condition. I therefore merge Moderate into Mild and report a three-class task, stating the merge explicitly so a reader knows what the third class contains.</p>
+      <div class="call good">
+        <span class="label">Design decision</span>
+        <p>Three classes: <em>no dementia</em> (266 patients) / <em>very mild</em> (58) / <em>mild-or-worse</em> (23). A binary formulation — demented vs. not — is held in reserve as a fallback should the three-class result prove too unstable to interpret.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 03</span><span class="note">the failure mode I am designing against</span></div>
+    <div class="body">
+      <h2>The central methodological risk</h2>
+      <p>This dataset contains a trap that will silently produce an excellent-looking and entirely worthless result, and avoiding it determines the whole design.</p>
+      <p>Suppose I pool all 86,437 images and shuffle them randomly into 80% training and 20% testing. Slice 120 of a given brain goes into training; slice 121 of that <em>same</em> brain goes into testing. The two pictures are nearly identical — same skull shape, same head size, same scanner framing, one slice apart.</p>
+
+      <div class="call risk">
+        <span class="label">What the model learns instead</span>
+        <p>Under that split the network does not need to learn what atrophy looks like. It can score extremely well by <strong>recognising individuals</strong> — memorising skull geometry during training and matching it at test time. The test score then measures the model's ability to re-identify people it has already seen, which is a problem it was never asked to solve and which has no clinical value whatsoever. The resulting number can look superb while the model is useless on a new patient.</p>
+      </div>
+
+      <p>This is not a hypothetical concern. It is the dominant failure mode for any dataset where one subject contributes many correlated samples, and the resulting inflation is large — large enough that a leaked result and an honest result are not on the same scale and cannot be compared.</p>
+
+      <div class="call good">
+        <span class="label">The countermeasure, stated as a rule</span>
+        <p>Split by <strong>patient</strong>, never by image. All slices and all repeat acquisitions of one person stay on the same side of every partition, enforced mechanically via <code>StratifiedGroupKFold</code> with the patient ID as the grouping key. And evaluate per patient, not per image: aggregate a patient's slice predictions into one prediction for that person, because the person is the unit a clinician makes a decision about.</p>
+      </div>
+
+      <p>Grouping by patient ID also handles the repeat-scan problem automatically — all four acquisitions of one head travel together, so the model is never tested on a second photograph of a brain it studied.</p>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 04</span><span class="note">models, smallest first</span></div>
+    <div class="body">
+      <h2>Which models I intend to use</h2>
+      <p>The governing constraint is 347 patients. A network's capacity to memorise scales with its parameter count, so with a sample this small the discipline is to <strong>start at the smallest model that could plausibly work and only climb if the data earns it</strong>. Each rung below must beat the one beneath it on held-out patients before I move up.</p>
+
+      <div class="ladder">
+        <div class="rung">
+          <span class="nm">Majority-class baseline</span><span class="tag">mandatory floor</span>
+          <span class="why">Predict "no dementia" for every patient. Learns nothing, yet scores 76.7% accuracy because 266 of 347 patients are healthy. Printed in every results table so that no accuracy figure can be read without its floor beside it.</span>
+        </div>
+        <div class="rung">
+          <span class="nm">Cached-feature linear probe</span><span class="tag">cheap reference</span>
+          <span class="why">Freeze the pretrained network entirely, extract each image's features once, and train only a linear classifier on top. Runs in seconds per fold, which makes it affordable to test design choices across all five folds instead of guessing from one.</span>
+        </div>
+        <div class="rung">
+          <span class="nm">ResNet-18 <span class="dim">— primary model</span></span><span class="tag">11 M params</span>
+          <span class="why">ImageNet-pretrained, fine-tuned in two stages. Small enough to resist memorising 221 training patients while still being a genuine convolutional network. This is the workhorse.</span>
+        </div>
+        <div class="rung">
+          <span class="nm">EfficientNet-B0 / ResNet-50</span><span class="tag">capacity test</span>
+          <span class="why">Second and third backbones, run only once ResNet-18 is stable. These answer an explicit question — does additional capacity help at this sample size, or does it only accelerate memorisation?</span>
+        </div>
+        <div class="rung">
+          <span class="nm">Probability-averaging ensemble</span><span class="tag">if justified</span>
+          <span class="why">Average the predicted probabilities of the individual backbones. Ensembling usually buys stability, which matters when single-fold scores are noisy — but it is tested at patient level and only once the members individually clear the baseline.</span>
+        </div>
+      </div>
+
+      <h3>Input representation: 2.5D rather than grey×3</h3>
+      <p>Pretrained networks expect a three-channel colour image, while MRI slices are greyscale. The conventional fix copies one grey slice into all three channels, which means two-thirds of every input carries no information at all.</p>
+      <p>Instead I stack three <em>adjacent</em> slices into the three channels — <code>s−2</code>, <code>s</code>, <code>s+2</code>, with the centre slice carrying the label. The network can then see how a structure changes as you move through the head, which is genuine anatomical context, for <strong>zero additional parameters</strong>. Neighbouring slices are drawn from the full scan before any slice-window filtering, so even edge slices get real neighbours rather than a duplicated centre; this was verified across 36,842 lookups with no fallbacks. Augmentation is applied to the merged three-channel image so that a rotation moves all three slices identically and the anatomy stays registered.</p>
+
+      <h3>Training recipe</h3>
+      <p><strong>Two-stage transfer.</strong> Stage one freezes the pretrained body and trains only the newly attached classifier head for 3 epochs — the fresh head starts out random, and letting its early wild corrections propagate backwards would damage the pretrained features. Stage two unfreezes the top block and fine-tunes everything at a much lower rate for up to 12 epochs, early-stopped on validation macro-F1, keeping the best checkpoint rather than the last.</p>
+      <p><strong>Settings:</strong> AdamW; head learning rate 1e-3 then 2e-4, backbone 2e-5 (discriminative rates with cosine decay); weight decay 1e-2; dropout 0.5; label smoothing 0.05; batch size 32; 224×224 inputs; central slices 124–136.</p>
+      <p><strong>Class imbalance</strong> is handled by a class-weighted loss and a weighted batch sampler, so the rare dementia classes are not drowned out by the healthy majority. I am deliberately <em>not</em> using ADASYN or SMOTE: those methods interpolate between feature vectors, and interpolating between raw brain images produces blurred composites that correspond to no real anatomy.</p>
+      <p><strong>Augmentation</strong> applies to the training split only: rotation ±10–15°, small shifts and zooms, brightness and contrast jitter, random erasing, and horizontal flips (brains are approximately symmetric). No vertical flips and no 90° rotations — a head never presents upside-down in a scanner, so such examples teach the model about images that will never occur at test time.</p>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 05</span><span class="note">the pipeline, in order</span></div>
+    <div class="body">
+      <h2>Method, step by step</h2>
+      <p>These steps are strictly ordered. Each depends on the one before it, and the ordering is what keeps the result honest — in particular, partitioning happens before augmentation and before any model is fitted.</p>
+
+      <ol class="steps">
+        <li><span class="st">Parse patient IDs from filenames</span><span class="sd">Build a table of <code>image_path → patient_id → class</code>. The patient ID is the grouping key for everything downstream.</span></li>
+        <li><span class="st">Merge Moderate into Mild</span><span class="sd">Produce three-class labels while retaining the original folder name, so the two Moderate patients stay traceable in the published split file.</span></li>
+        <li><span class="st">Lock away a held-out test set of patients</span><span class="sd">20% of <em>patients</em>, stratified by class — 70 people. Marked <code>fold = −1</code> and not inspected again until the recipe is frozen.</span></li>
+        <li><span class="st">StratifiedGroupKFold on the remainder</span><span class="sd">277 development patients into 5 folds of 55–56, grouped by patient ID. No person's data appears in two folds.</span></li>
+        <li><span class="st">Restrict to central slices</span><span class="sd">Keep slices 124–136 rather than all 61. Redundancy across neighbouring slices is high and the central window carries the signal; widened to 118–142 if the model proves to be memorising.</span></li>
+        <li><span class="st">Augment and rebalance inside the training split only</span><span class="sd">Never on validation or test — those must consist of real, unmodified scans as they would actually arrive.</span></li>
+        <li><span class="st">Two-stage transfer learning, per fold</span><span class="sd">Head-only, then partial unfreeze. Early-stop on validation macro-F1 and retain the best checkpoint.</span></li>
+        <li><span class="st">Aggregate slice predictions to one per patient</span><span class="sd">Average the predicted probabilities across all of a patient's slices and acquisitions, then take the argmax. One prediction per person.</span></li>
+        <li><span class="st">Report mean ± standard deviation across the 5 folds</span><span class="sd">Macro-F1, balanced accuracy, per-class recall and confusion matrix — always printed beside the majority baseline.</span></li>
+        <li><span class="st">Grad-CAM audit, then the locked test set once</span><span class="sd">Confirm the model attends to brain tissue, freeze the recipe, then evaluate the 70 held-out patients a single time. That number is the headline result.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 06</span><span class="note">how it will be judged</span></div>
+    <div class="body">
+      <h2>Evaluation protocol</h2>
+      <p>The split produces the following working set. These figures are people, not pictures:</p>
+
+      <div class="tw">
+        <table>
+          <caption>Table 2 — Partition sizes, fold 0 (slices 124–136)</caption>
+          <thead>
+            <tr><th>Partition</th><th class="n">Patients</th><th class="n">Images</th><th>Role</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Training (folds 1–4)</td><td class="n">221</td><td class="n">11,791</td><td>fit parameters</td></tr>
+            <tr><td>Validation (fold 0)</td><td class="n">56</td><td class="n">2,860</td><td>early stopping, model selection</td></tr>
+            <tr><td>Held-out test</td><td class="n">70</td><td class="n dim">—</td><td>touched once, at the end</td></tr>
+            <tr class="tot"><td>Total</td><td class="n">347</td><td class="n">86,437</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Why not accuracy</h3>
+      <p>266 of 347 patients are non-demented. A model that outputs "no dementia" unconditionally — that has learned nothing — scores <strong>76.7% accuracy</strong> while catching not a single case of dementia. Accuracy in this problem is therefore close to meaningless on its own, and I will not use it as a headline figure.</p>
+      <p>The primary metric is <strong>macro-F1 at patient level</strong>, which scores each class separately and averages them, so ignoring the rare dementia classes is heavily penalised. Secondary metrics are balanced accuracy, per-class recall, the confusion matrix, and per-class precision–recall AUC. The majority baseline appears as a row in every results table.</p>
+
+      <div class="call warn">
+        <span class="label">How noisy a single fold really is</span>
+        <p>A validation fold of 56 patients breaks down to roughly 42 / 10 / 4 across the three classes. With four patients in the rarest class, <strong>one patient changing answer moves macro-F1 by about 0.05</strong>. I will therefore not conclude that a change helped from a single fold moving 0.02 — every reported comparison runs all five folds and reports a standard deviation.</p>
+      </div>
+
+      <h3>Reproducibility</h3>
+      <p>A fixed global seed across Python, NumPy and PyTorch with deterministic cuDNN. The fold assignment of every patient is written to a versioned CSV and published alongside the results, so the partition itself is auditable — a reader can verify that no patient crossed a boundary rather than taking my word for it.</p>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 07</span><span class="note">explanations with a job to do</span></div>
+    <div class="body">
+      <h2>Explainability</h2>
+      <p>A model that outputs a dementia stage without justification is not clinically usable, regardless of its score — a clinician needs to see what drove the decision in order to decide whether to trust it. I will produce <strong>Grad-CAM</strong> heatmaps and gradient <strong>saliency maps</strong> over correctly and incorrectly classified patients, showing which regions of the scan most influenced the prediction.</p>
+      <p>Beyond that conventional use, these visualisations serve a second and in my view more valuable function in this project:</p>
+      <div class="call key">
+        <span class="label">Grad-CAM as a leakage detector</span>
+        <p>A model that is scoring well by recognising individuals will tend to attend to the skull outline, the scalp, and scanner framing. A model that is genuinely detecting atrophy should attend to brain tissue — the ventricles and medial temporal structures. Running Grad-CAM is therefore an independent, cheap check on whether the protective measures in §03 actually worked. If the heat lands on the skull, something is wrong with my data handling, not with the model.</p>
+      </div>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 08</span><span class="note">what already exists</span></div>
+    <div class="body">
+      <h2>Current status</h2>
+      <p>This is not a proposal from a standing start. Most of the infrastructure is built and the first training runs have been executed.</p>
+
+      <div class="tw">
+        <table>
+          <caption>Table 3 — Implementation status</caption>
+          <thead><tr><th>Component</th><th>State</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td>Patient-level split generator</td><td><span class="chip done">done</span></td><td>Two CSVs: one row per patient, one per image</td></tr>
+            <tr><td>Verified patient &amp; class counts</td><td><span class="chip done">done</span></td><td>347 patients; no cross-class overlap</td></tr>
+            <tr><td>2.5D slice loader</td><td><span class="chip done">done</span></td><td>0 of 36,842 neighbour lookups fall back</td></tr>
+            <tr><td>Two-stage training loop</td><td><span class="chip done">done</span></td><td>Early stopping on validation macro-F1</td></tr>
+            <tr><td>Cached-feature linear probe</td><td><span class="chip done">done</span></td><td>Makes 5-fold sweeps affordable</td></tr>
+            <tr><td>Overfitting countermeasures</td><td><span class="chip wip">in progress</span></td><td>Applied; currently being re-measured</td></tr>
+            <tr><td>Full 5-fold cross-validation</td><td><span class="chip todo">pending</span></td><td>Main GPU cost; needs the recipe frozen</td></tr>
+            <tr><td>Grad-CAM audit</td><td><span class="chip todo">pending</span></td><td>After a model clears the baseline</td></tr>
+            <tr><td>Held-out test evaluation</td><td><span class="chip todo">pending</span></td><td>Deliberately last, run once</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>The first run failed, and the failure is informative</h3>
+      <p>An early configuration produced this trace:</p>
+      <div class="tw"><table><thead><tr><th>Stage</th><th class="n">Train loss</th><th class="n">Val macro-F1</th><th class="n">Val bal. acc.</th></tr></thead><tbody>
+        <tr><td>stage 2 · epoch 1</td><td class="n">0.5125</td><td class="n">0.4850</td><td class="n">0.5040</td></tr>
+        <tr><td>stage 2 · epoch 2</td><td class="n">0.2590</td><td class="n bad">0.4365</td><td class="n bad">0.4357</td></tr>
+        <tr><td>stage 2 · epoch 3</td><td class="n">0.1630</td><td class="n bad">0.4069</td><td class="n bad">0.4190</td></tr>
+      </tbody></table></div>
+      <p>Training loss fell threefold while the validation score fell every single epoch, finishing at 0.68 accuracy — <em>below</em> the 0.767 a model scores by guessing "no dementia" every time. That is the textbook signature of overfitting: 11 million adjustable parameters memorising 221 people rather than learning what dementia looks like.</p>
+      <p>I report this deliberately. It is the clearest practical evidence I can offer that the protocol works as intended — a patient-level split <em>exposed</em> this failure immediately, where an image-level split would have concealed it behind a high score and I would still believe the model worked.</p>
+      <p>The response has been to constrain capacity rather than add it: widen the slice window for more genuine data, freeze a larger share of the network during fine-tuning, pin batch-normalisation statistics in frozen blocks, strengthen augmentation, and raise weight decay a hundredfold alongside dropout and label smoothing. Those changes are in place and being re-measured.</p>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 09</span><span class="note">what success looks like</span></div>
+    <div class="body">
+      <h2>Expected outcome, stated in advance</h2>
+      <p>I am committing to this expectation <em>before</em> running the experiments, so the criterion cannot be retrofitted to whatever happens to come out:</p>
+      <div class="call good">
+        <span class="label">Pre-registered expectation</span>
+        <p>A patient-level <strong>macro-F1 in the range 0.55–0.70</strong>, clearly above the majority-baseline floor. If any configuration returns above 0.90, my first action will be to search for a leak in the pipeline — not to report it.</p>
+      </div>
+      <p>That second sentence is the part I would most like noted. On a dataset of 347 people with 23 in the rarest class, a near-perfect score is far more likely to indicate a broken experiment than a breakthrough, and treating it as a red flag rather than a result is a deliberate commitment of this project.</p>
+      <p>The deliverables are threefold:</p>
+      <ul>
+        <li>A <strong>leakage-safe benchmark</strong> for three-class OASIS staging, measured per patient, that a later study can build on rather than having to re-derive.</li>
+        <li>A <strong>controlled comparison</strong> of backbone capacity, and of the 2.5D input against the conventional greyscale-replicated input — each tested across all five folds.</li>
+        <li>A <strong>published, auditable split file</strong> recording which patient sat in which partition, so the central methodological claim can be verified by a reader instead of trusted.</li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 10</span><span class="note">stated plainly, not buried</span></div>
+    <div class="body">
+      <h2>Risks and limitations</h2>
+      <ul>
+        <li><strong>Single-site data.</strong> OASIS-1 only, with no external validation cohort. Generalisation beyond this scanner and this population is untested, and I will not claim it.</li>
+        <li><strong>Small effective sample.</strong> 347 people, 23 of them in the rarest class. Confidence intervals will be wide and will be reported as such.</li>
+        <li><strong>2D slices discard volumetric context.</strong> The 2.5D input mitigates this; it does not eliminate it. A full 3D approach is out of reach at this sample size and compute budget.</li>
+        <li><strong>Moderate dementia is not separately assessable</strong> at two patients, and is merged rather than claimed.</li>
+        <li><strong>Imaging only.</strong> No cognitive scores, demographics or genetic markers are fused in, though they would likely help considerably. This is a scope decision, not an oversight.</li>
+        <li><strong>The reported score will be modest</strong> by the standards of headline figures in this application area. That is the expected and intended consequence of the protocol in §03.</li>
+      </ul>
+      <p>Stated openly, these strengthen rather than weaken the work: they show the failure modes were identified in advance and designed around, which is exactly the claim the project is making.</p>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <section>
+    <div class="gut"><span class="num">§ 11</span><span class="note">the ask</span></div>
+    <div class="body">
+      <h2>What I need agreed</h2>
+      <ul>
+        <li><strong>The three-class formulation</strong>, with Moderate merged into Mild and the merge disclosed, rather than a four-class staging that would require reporting on a two-patient class.</li>
+        <li><strong>Patient-level macro-F1 as the headline metric</strong>, with accuracy appearing only beside its majority baseline.</li>
+        <li><strong>The 0.55–0.70 target range</strong>, so that a methodologically correct result is not mistaken for a disappointing one when set against the larger figures common in this area.</li>
+        <li><strong>Compute:</strong> Kaggle's free T4 allocation is sufficient. No local GPU is available; the cached-feature probe is what keeps five-fold sweeps inside that quota.</li>
+      </ul>
+      <p>With those agreed, the remaining work is the full cross-validation run, the Grad-CAM audit, and the single held-out evaluation — in that order.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p><strong>References</strong></p>
+    <ol>
+      <li>Marcus, D.S.; Wang, T.H.; Parker, J.; Csernansky, J.G.; Morris, J.C.; Buckner, R.L. Open Access Series of Imaging Studies (OASIS): Cross-sectional MRI Data in Young, Middle Aged, Nondemented, and Demented Older Adults. <em>Journal of Cognitive Neuroscience</em> 2007, 19, 1498–1507.</li>
+      <li>Selvaraju, R.R.; Cogswell, M.; Das, A.; Vedantam, R.; Parikh, D.; Batra, D. Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization. <em>ICCV</em> 2017.</li>
+      <li>Simonyan, K.; Vedaldi, A.; Zisserman, A. Deep Inside Convolutional Networks: Visualising Image Classification Models and Saliency Maps. <em>ICLR Workshop</em> 2014.</li>
+      <li>He, K.; Zhang, X.; Ren, S.; Sun, J. Deep Residual Learning for Image Recognition. <em>CVPR</em> 2016.</li>
+      <li>Tan, M.; Le, Q.V. EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks. <em>ICML</em> 2019.</li>
+      <li>Loshchilov, I.; Hutter, F. Decoupled Weight Decay Regularization (AdamW). <em>ICLR</em> 2019.</li>
+      <li>Pedregosa, F. et al. Scikit-learn: Machine Learning in Python — <code>StratifiedGroupKFold</code>. <em>JMLR</em> 2011, 12, 2825–2830.</li>
+    </ol>
+    <p class="dim">Patient counts, slice-index uniformity, acquisition collisions, neighbour-lookup coverage and the training trace in §08 were verified directly against the image files and run logs in this project repository.</p>
+  </footer>
+
+</div>
